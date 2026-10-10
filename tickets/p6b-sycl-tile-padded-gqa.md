@@ -16,6 +16,8 @@ Read `docs/design/P6-sycl-padded-gqa.md` (the design, decided) and `docs/researc
 
 Harness: `bin/sycl-cpu-tbo.sh [test-backend-ops args]` builds and runs llama.cpp's SYCL backend on the Intel OpenCL CPU device (see `docs/TOOLCHAIN.md` "SYCL on the CPU"). Use it for every correctness run.
 
+Harness notes (from p6a, `bench/results/sycl-cpu-fa-baseline-20261010/README.txt`): the "p6a subset" is the exact one-line filter `P='...'` in that README (85 cases, 85/85 pass on the unpatched clone). Export `SYCL_CACHE_PERSISTENT=1 SYCL_CACHE_DIR=/tmp/<ticket-name>-sycl-cache` (your own dir; never another worker's) to reuse CPU-JIT programs across runs; `GGML_SYCL_MKL_FA_DEBUG=1` prints `[FA-DISP]` lines naming the kernel each case ran on. The first build of the scratch clone takes ~10 min at `-j 8`; another worker may be building at the same time, so expect it to be slower. Whole-suite FA runs are not feasible on the CPU (two cases took 50 min before per-kernel images); always filter.
+
 ## Design (manager decided, do not change)
 In `ggml/src/ggml-sycl/fattn-tile.hpp`:
 1. **Indexing** (replace `:725-732`): `ntiles_z_gqa = (gqa_ratio + ncols2 - 1)/ncols2; sequence = z/(ntiles_z_gqa*ne12); kv_head = (z/ntiles_z_gqa) % ne12; zt_gqa = z % ntiles_z_gqa; head0 = kv_head*gqa_ratio + zt_gqa*ncols2;` K/V base pointers use `kv_head`. Everything else that uses `head0`/`sequence` keeps its meaning. When ncols2 divides G this must be the identical mapping to today (state the algebra in a comment, one line).

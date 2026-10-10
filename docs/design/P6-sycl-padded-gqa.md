@@ -1,6 +1,6 @@
 # P-6 design: padded GQA in the SYCL TILE FlashAttention kernel
 
-Status: **designed, not implemented.** Harness for correctness without an Arc GPU: ticket `p6a-sycl-cpu-harness` (SYCL on the OpenCL CPU device). Implementation: ticket `p6b` (to be written once p6a's negative control passes). Owner decision points are marked **Decision**.
+Status: **designed, not implemented.** Harness for correctness without an Arc GPU: `bin/sycl-cpu-tbo.sh` (p6a, SYCL on the OpenCL CPU device, done). Implementation: ticket `p6b-sycl-tile-padded-gqa`. Owner decision points are marked **Decision**.
 
 Port of volta-fa P-6 (`~/Github/volta-fa/docs/design/P6-small-batch-gqa.md`, patches 0001/0002). The mechanism is the same, but where the fix lands differs. On Volta the MMA kernel already masked phantom heads and only dispatch changed. On Arc the SYCL **TILE** kernel has no phantom-head support (neither does CUDA's TILE kernel), so the kernel changes too.
 
