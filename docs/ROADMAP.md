@@ -19,7 +19,7 @@ Phases have explicit exclusions. Exit criteria for Phases 0–3 are measured on 
 - P-3b Static compile of llama.cpp's SYCL FA kernels for acm-g10 (`-DGGML_SYCL_DEVICE_ARCH=acm-g10` + IGC dumps): SIMD width, GRF, spills per TILE/VEC instance. Not started.
 - P-4 Planning calculator for Xe-HPG (SLM per work-group, GRF mode → threads/XVE, roofline from **measured** bandwidth once Phase 0 has it). Not started; constants come from the box, not datasheets.
 - P-5 Phase 0 measurement kit: `bench/phase0.sh` runs FA support/correctness/perf via test-backend-ops on **SYCL0 and Vulkan0**, plus the llama-bench grid (depth, KV quant, small batches, ubatch, MKL/oneDNN on/off). Drafted, **not run**.
-- P-6 Padded GQA + one predicate in the SYCL TILE dispatch (port of volta-fa P-6). Design first: confirm the TILE kernel masks phantom heads. Not started.
+- P-6 Padded GQA in the SYCL TILE kernel + dispatch (port of volta-fa P-6). **Designed** (`docs/design/P6-sycl-padded-gqa.md`): unlike Volta's MMA kernel, the SYCL TILE kernel has no phantom-head support, so the kernel's work-group indexing changes too. Correctness harness first: SYCL on the OpenCL CPU device (ticket `p6a-sycl-cpu-harness`, in progress with a Sol worker); implementation ticket `p6b` after it.
 - P-8 Conversion geometry for short non-contiguous rows in `ggml-sycl/convert.cpp` (port of volta-fa 0005/0006). Not started.
 **Excludes**: any performance claim; tuning by guesswork; Battlemage/Xe2 code paths.
 
