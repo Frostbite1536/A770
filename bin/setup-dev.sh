@@ -68,11 +68,12 @@ EOT
 fi
 
 if [ "${WITH_DPCPP:-0}" = 1 ] && { [ ! -x tools/oneapi-2026.1/bin/icpx ] || [ ! -d tools/oneapi-2026.1/lib/cmake/mkl ] ||
-                                  [ ! -e tools/oneapi-2026.1/etc/OpenCL/vendors/intel-ocl-cpu.icd ]; }; then
+                                  [ ! -e tools/oneapi-2026.1/etc/OpenCL/vendors/intel-ocl-cpu.icd ] || [ ! -d tools/oneapi-2026.1/lib/cmake/TBB ]; }; then
     echo "[setup-dev] icpx/DPC++ + oneMKL SYCL + OpenCL CPU runtime 2026.1 via conda-forge (~4.4 GB)"
     [ -x tools/micromamba ] || { fetch "https://github.com/mamba-org/micromamba-releases/releases/download/$MAMBA_VERSION/micromamba-linux-64" tools/micromamba; chmod +x tools/micromamba; }
     export MAMBA_ROOT_PREFIX=$PWD/tools/mamba
-    pkgs=("dpcpp_linux-64=2026.1.*" "mkl-devel-dpcpp=2026.1.*" "intel-opencl-rt=2026.1.*")
+    # tbb-devel: oneMKL's CMake config needs TBB's (MKL_SYCL_THREADING defaults to tbb_thread).
+    pkgs=("dpcpp_linux-64=2026.1.*" "mkl-devel-dpcpp=2026.1.*" "intel-opencl-rt=2026.1.*" tbb-devel)
     if [ -d tools/oneapi-2026.1/conda-meta ]; then tools/micromamba install -y -q -p tools/oneapi-2026.1 -c conda-forge "${pkgs[@]}"
     else tools/micromamba create -y -q -p tools/oneapi-2026.1 -c conda-forge "${pkgs[@]}"; fi
     tools/micromamba clean -a -y -q > /dev/null

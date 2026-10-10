@@ -52,3 +52,6 @@ Nothing else.
 
 ## Done means
 The script and patch exist, the FA suite (or documented subset) has run on the CPU SYCL device with counts recorded, and the negative control proved the harness catches a broken TILE kernel. Final report: files changed; every command with its result line; pass/fail/unsupported counts; wall times; the negative-control counts; what was NOT verified. Do not decide whether to ship.
+
+## Manager decision (round 2, after your TBB stop)
+Your stop was correct. `tbb-devel` (TBB 2023.1 CMake config) is now installed in `/home/p51/Github/A770/tools/oneapi-2026.1`. The manager verified that the configure command from "Design" now completes (`Build files have been written`). Continue from where you stopped: your test-only patch is already applied in `third_party/llama.cpp`. This machine has 8 cores: build with `-j 8`. The first full ggml-sycl build is long; if a command times out, rerun it (ninja resumes). Everything else in the ticket is unchanged.
