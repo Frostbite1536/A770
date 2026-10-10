@@ -1,0 +1,83 @@
+# Test-only Intel OpenCL CPU correctness harness, enabled by GGML_SYCL_TEST_CPU=1.
+# Set the gate at configure time and runtime. Not for upstream; no GPU claims.
+# Approved compile-time exception: scalar multiplication for ALiBi slopes avoids
+# the CPU-JIT missing 32-wide pown builtin. P-6 does not pad under ALiBi;
+# the rounding difference is within test tolerance. This exception is ungated.
+# Env-gated per-kernel device images limit CPU-JIT program size; optimization stays on.
+diff --git a/ggml/src/ggml-sycl/CMakeLists.txt b/ggml/src/ggml-sycl/CMakeLists.txt
+index 1697ecd95..d91bd0606 100644
+--- a/ggml/src/ggml-sycl/CMakeLists.txt
++++ b/ggml/src/ggml-sycl/CMakeLists.txt
+@@ -171,7 +171,13 @@ endif()
+ if (GGML_SYCL_TARGET STREQUAL "INTEL")
+     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
+     if (NOT GGML_SYCL_DEVICE_ARCH)
+-        target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
++        # The OpenCL CPU JIT rejects this Intel GPU build option.
++        if (NOT "$ENV{GGML_SYCL_TEST_CPU}" STREQUAL "1")
++            target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
++        else()
++            # Keep CPU JIT programs small; leave compiler optimization enabled.
++            target_link_options(ggml-sycl PRIVATE -fsycl-device-code-split=per_kernel)
++        endif()
+     else()
+         message(STATUS "Skipping -ze-intel-greater-than-4GB-buffer-required for spir64_gen AOT")
+     endif()
+diff --git a/ggml/src/ggml-sycl/common.hpp b/ggml/src/ggml-sycl/common.hpp
+index 475509372..716d7a80a 100644
+--- a/ggml/src/ggml-sycl/common.hpp
++++ b/ggml/src/ggml-sycl/common.hpp
+@@ -774,7 +774,11 @@ static __dpct_inline__ float get_alibi_slope(const float    max_bias,
+     const float base = h < n_head_log2 ? m0 : m1;
+     const int   exph = h < n_head_log2 ? h + 1 : 2*(h - n_head_log2) + 1;
+ 
+-    return dpct::pow(base, exph);
++    // CPU-JIT workaround: avoid missing 32-wide pown for ALiBi slopes.
++    // P-6 does not pad under ALiBi; the rounding difference is within test tolerance.
++    float r = 1.0f;
++    for (int i = 0; i < exph; ++i) r *= base;
++    return r;
+ }
+ 
+ static const sycl::uint3 init_fastdiv_values(uint32_t d) {
+diff --git a/ggml/src/ggml-sycl/dpct/helper.hpp b/ggml/src/ggml-sycl/dpct/helper.hpp
+index 85af4cab6..efde39e20 100644
+--- a/ggml/src/ggml-sycl/dpct/helper.hpp
++++ b/ggml/src/ggml-sycl/dpct/helper.hpp
+@@ -909,6 +909,20 @@ namespace dpct
+         }
+ 
+         inline std::string get_preferred_gpu_platform_name() {
++            // Local correctness harness only; the default device becomes SYCL0.
++            const char * test_cpu = getenv("GGML_SYCL_TEST_CPU");
++            if (test_cpu && std::strcmp(test_cpu, "1") == 0) {
++                const auto device = sycl::device(sycl::default_selector_v);
++                const auto platform = device.get_platform();
++                const auto name = platform.get_info<sycl::info::platform::name>();
++                if (!device.is_cpu() || device.get_backend() != sycl::backend::opencl ||
++                    name.find("Intel") == std::string::npos) {
++                    throw std::runtime_error("GGML_SYCL_TEST_CPU=1 requires an Intel OpenCL CPU as SYCL0");
++                }
++                std::cerr << "GGML_SYCL_TEST_CPU: SYCL0 is Intel OpenCL CPU: "
++                          << device.get_info<sycl::info::device::name>() << std::endl;
++                return name;
++            }
+             std::string result;
+ 
+             std::string filter = "";
+diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
+index d2c1a1a44..682e42b95 100644
+--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
+@@ -237,6 +237,11 @@ static ggml_sycl_device_info ggml_sycl_init() {
+         info.devices[i].cc =
+             100 * prop.get_major_version() + 10 * prop.get_minor_version();
+         info.devices[i].nsm = prop.get_max_compute_units() / 16; //16: Number of Xe Cores
++        const char * test_cpu = getenv("GGML_SYCL_TEST_CPU");
++        if (test_cpu && std::strcmp(test_cpu, "1") == 0 && device.is_cpu()) {
++            // CPU compute units are not groups of 16 Xe cores.
++            info.devices[i].nsm = prop.get_max_compute_units();
++        }
+         info.devices[i].opt_feature.reorder = device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
+ #if GGML_SYCL_DNNL
+         info.devices[i].opt_feature.onednn_optimized_gemm = ggml_sycl_dnnl_detect_optimized_gemm(i);
