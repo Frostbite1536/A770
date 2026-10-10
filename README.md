@@ -49,7 +49,7 @@ docs/            ARCHITECTURE, INVARIANTS, ROADMAP, WORKFLOW, PROFILING, TOOLCHA
 Without an Arc GPU or oneAPI (see [docs/TOOLCHAIN.md](docs/TOOLCHAIN.md)):
 
 ```bash
-bin/setup-dev.sh                   # WITH_DPCPP=1 also installs icpx 2026.1 (~3.3 GB) for SYCL reports
+bin/setup-dev.sh                   # WITH_DPCPP=1 also installs icpx, oneMKL SYCL and the OpenCL CPU runtime (~4.4 GB)
 export PATH=$PWD/.venv/bin:$PATH   # once per shell
 cmake -S . -B build -G Ninja && cmake --build build && ctest --test-dir build --output-on-failure
 python bin/xe-report.py tests/xe/dpas_simd8.cl

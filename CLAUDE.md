@@ -20,7 +20,7 @@ Attention and multi-GPU work for the Intel Arc A770 (Xe-HPG, die `acm-g10`). SYC
 
 ```bash
 # dev machine (no Arc GPU, no system oneAPI). Setup: docs/TOOLCHAIN.md
-bin/setup-dev.sh                   # .venv + tools/neo (ocloc + IGC); WITH_DPCPP=1 adds icpx 2026.1 (~3.3 GB)
+bin/setup-dev.sh                   # .venv + tools/neo (ocloc + IGC); WITH_DPCPP=1 adds icpx, oneMKL SYCL, OpenCL CPU runtime 2026.1 (~4.4 GB)
 export PATH=$PWD/.venv/bin:$PATH   # once per shell
 cmake -S . -B build -G Ninja && cmake --build build && ctest --test-dir build --output-on-failure
 python bin/xe-report.py src/attention/<file>.{cpp,cl} [--large-grf] [--expect-dpas REGEX]   # static acm-g10 report

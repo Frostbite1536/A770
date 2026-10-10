@@ -18,7 +18,7 @@ No sudo, no system oneAPI. Everything lives in the gitignored `.venv/` and `tool
 
 ```bash
 bin/setup-dev.sh                 # .venv (cmake, ninja, shellcheck, numpy) + tools/neo: ocloc + IGC (~360 MB extracted)
-WITH_DPCPP=1 bin/setup-dev.sh    # + tools/oneapi-2026.1: icpx/DPC++ from conda-forge (~3.3 GB)
+WITH_DPCPP=1 bin/setup-dev.sh    # + tools/oneapi-2026.1: icpx/DPC++, oneMKL SYCL, OpenCL CPU runtime from conda-forge (~4.4 GB)
 ```
 
 What works here:

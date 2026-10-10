@@ -3,7 +3,9 @@
 #   .venv/                cmake, ninja, shellcheck, numpy
 #   tools/uv              pinned uv binary (python3-venv/pip may be missing)
 #   tools/neo/            ocloc 26.35 + IGC 2.41.5 extracted from Intel's .debs (static acm-g10 reports)
-#   tools/oneapi-2026.1/  icpx/DPC++ 2026.1 from conda-forge (optional: WITH_DPCPP=1, ~3.3 GB)
+#   tools/oneapi-2026.1/  icpx/DPC++ 2026.1, oneMKL SYCL 2026.1 (llama.cpp's SYCL backend needs it) and the
+#                         OpenCL CPU runtime (runs SYCL on this CPU for correctness), from conda-forge
+#                         (optional: WITH_DPCPP=1, ~4.4 GB)
 # Everything is gitignored and checksum-verified. Re-running is safe.
 set -euo pipefail
 cd "$(dirname "$0")/.." || exit 2
@@ -65,11 +67,14 @@ EOT
     chmod +x tools/neo/bin/ocloc
 fi
 
-if [ "${WITH_DPCPP:-0}" = 1 ] && [ ! -x tools/oneapi-2026.1/bin/icpx ]; then
-    echo "[setup-dev] icpx/DPC++ 2026.1 via conda-forge (~3.3 GB)"
+if [ "${WITH_DPCPP:-0}" = 1 ] && { [ ! -x tools/oneapi-2026.1/bin/icpx ] || [ ! -d tools/oneapi-2026.1/lib/cmake/mkl ] ||
+                                  [ ! -e tools/oneapi-2026.1/etc/OpenCL/vendors/intel-ocl-cpu.icd ]; }; then
+    echo "[setup-dev] icpx/DPC++ + oneMKL SYCL + OpenCL CPU runtime 2026.1 via conda-forge (~4.4 GB)"
     [ -x tools/micromamba ] || { fetch "https://github.com/mamba-org/micromamba-releases/releases/download/$MAMBA_VERSION/micromamba-linux-64" tools/micromamba; chmod +x tools/micromamba; }
     export MAMBA_ROOT_PREFIX=$PWD/tools/mamba
-    tools/micromamba create -y -q -p tools/oneapi-2026.1 -c conda-forge "dpcpp_linux-64=2026.1.*"
+    pkgs=("dpcpp_linux-64=2026.1.*" "mkl-devel-dpcpp=2026.1.*" "intel-opencl-rt=2026.1.*")
+    if [ -d tools/oneapi-2026.1/conda-meta ]; then tools/micromamba install -y -q -p tools/oneapi-2026.1 -c conda-forge "${pkgs[@]}"
+    else tools/micromamba create -y -q -p tools/oneapi-2026.1 -c conda-forge "${pkgs[@]}"; fi
     tools/micromamba clean -a -y -q > /dev/null
 fi
 
