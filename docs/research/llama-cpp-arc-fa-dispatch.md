@@ -61,6 +61,8 @@ This is the same mechanism as volta-fa P-6 (`third_party/patches/0002` there). O
 
 `bin/llama-sycl-fa-static.sh` (IGC 2.41.5, icpx 2026.1, upstream 79e2e74; report in `bench/results/llama-sycl-fa-static-20261010/`): **every** TILE instance at D = 128 and D = 256 compiles to SIMD32 with 128 GRF (8 threads/XVE) and spills **7.4–14.8 KB** per hardware thread. That includes the ncols2 = 4/8 instances P-6 relies on. The cause: the kernel requires sub-group 32 (`fattn-tile.hpp:1077`, "can't support WARP_16_SIZE"), and at SIMD32, 128 GRF leaves 128 bytes (32 floats) per work-item, too few for the VKQ accumulators. VEC f16 has 14 spilling kernels (max 4.4 KB); VEC already opts into `grf_size_automatic` for D ≥ 512 only (`fattn-vec.hpp:594`), and TILE never does (`launch_fattn<..., use_large_grf = false>`, `fattn-common.hpp:907`).
 
+**P-10 (static, `bench/results/p10-tile-grf-static-20261010/comparison.md`)**: 256 GRF (`grf_size_automatic` or forced) reduces most spills (e.g. D 128 `1x8` 7.6 → 1.2 KB) but removes none, makes several D = 256 configs worse (`2x8` 10.2 → 17.8 KB), and halves threads/XVE to 4. Large GRF is not a fix; the SIMD32 requirement is the structural cause, so a SIMD16 TILE variant (twice the registers per work-item) is the design option, after Phase 0 shows the spills cost time.
+
 Static only: how much these spills cost at runtime (spill traffic goes through L1/L3) is a Phase 0 question. It is a new candidate below (§5, item 6).
 
 Before porting anything, re-check upstream for the same fix (the SYCL backend moves fast: oneDNN/MKL FA paths and Xe2 tuning landed in 2026).
