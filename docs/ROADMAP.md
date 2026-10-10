@@ -16,8 +16,9 @@ Phases have explicit exclusions. Exit criteria for Phases 0–3 are measured on 
   3. SYCL converts quantised K/V to F16 for B = 3..31 with the 256-work-item-per-row geometry volta-fa fixed in CUDA (0005/0006).
   4. Nothing below 32 tokens uses XMX on the A770.
   5. Vulkan's Intel decode fast path is integrated-GPU-only on Xe1.
-- P-3b Static compile of llama.cpp's SYCL FA kernels for acm-g10 (`-DGGML_SYCL_DEVICE_ARCH=acm-g10` + IGC dumps): SIMD width, GRF, spills per TILE/VEC instance. Not started.
-- P-4 Planning calculator for Xe-HPG (SLM per work-group, GRF mode → threads/XVE, roofline from **measured** bandwidth once Phase 0 has it). Not started; constants come from the box, not datasheets.
+- P-3b Static compile of llama.cpp's SYCL FA kernels for acm-g10. ✅ `bin/llama-sycl-fa-static.sh`; upstream baseline in `bench/results/llama-sycl-fa-static-20261010/`. Finding: every TILE instance at D 128/256 spills 7–15 KB at SIMD32/128 GRF (research §6).
+- P-10 TILE register pressure: does `grf_size_automatic` (256 GRF) remove the spills, at what thread cost? Static experiment (ticket p10), then an A770 A/B.
+- P-4 Planning calculator and decode cost model for Xe-HPG. ✅ `bin/plan-tiles.py`, `bin/decode-gqa-model.py` (datasheet constants, labelled; recalibrate from Phase 0). Note from the planner: at 128 GRF a SIMD8 sub-group holds only 4 KB of live data.
 - P-5 Phase 0 measurement kit: `bench/phase0.sh` runs FA support/correctness/perf via test-backend-ops on **SYCL0 and Vulkan0**, plus the llama-bench grid (depth, KV quant, small batches, ubatch, MKL/oneDNN on/off). Drafted, **not run**.
 - P-6 Padded GQA in the SYCL TILE kernel + dispatch (port of volta-fa P-6). **Designed** (`docs/design/P6-sycl-padded-gqa.md`): unlike Volta's MMA kernel, the SYCL TILE kernel has no phantom-head support, so the kernel's work-group indexing changes too. Correctness harness first: SYCL on the OpenCL CPU device (ticket `p6a-sycl-cpu-harness`, in progress with a Sol worker); implementation ticket `p6b` after it.
 - P-8 Conversion geometry for short non-contiguous rows in `ggml-sycl/convert.cpp` (port of volta-fa 0005/0006). Not started.

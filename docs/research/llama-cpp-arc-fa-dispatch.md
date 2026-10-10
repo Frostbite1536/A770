@@ -55,5 +55,12 @@ This is the same mechanism as volta-fa P-6 (`third_party/patches/0002` there). O
 3. **Conversion launch geometry** for short non-contiguous rows (port of volta-fa 0005/0006 to `convert.cpp`).
 4. **An XMX small-batch kernel** (B 1–31). Today nothing below 32 tokens uses XMX on the A770. Only worth it if Phase 0 shows TILE compute-bound rather than bandwidth-bound after (1).
 5. Multi-GPU: `GGML_SYCL_DEV2DEV_MEMCPY` modes and peer access on consumer Arc (README notes crashes on the L0 path).
+6. **TILE register pressure** (§6): opt TILE into `grf_size_automatic` (256 GRF: half the threads, maybe no spills), or a SIMD16 TILE variant. Static experiment first (P-10).
+
+## 6. Static: the SYCL TILE kernels spill on acm-g10 (2026-10-10)
+
+`bin/llama-sycl-fa-static.sh` (IGC 2.41.5, icpx 2026.1, upstream 79e2e74; report in `bench/results/llama-sycl-fa-static-20261010/`): **every** TILE instance at D = 128 and D = 256 compiles to SIMD32 with 128 GRF (8 threads/XVE) and spills **7.4–14.8 KB** per hardware thread. That includes the ncols2 = 4/8 instances P-6 relies on. The cause: the kernel requires sub-group 32 (`fattn-tile.hpp:1077`, "can't support WARP_16_SIZE"), and at SIMD32, 128 GRF leaves 128 bytes (32 floats) per work-item, too few for the VKQ accumulators. VEC f16 has 14 spilling kernels (max 4.4 KB); VEC already opts into `grf_size_automatic` for D ≥ 512 only (`fattn-vec.hpp:594`), and TILE never does (`launch_fattn<..., use_large_grf = false>`, `fattn-common.hpp:907`).
+
+Static only: how much these spills cost at runtime (spill traffic goes through L1/L3) is a Phase 0 question. It is a new candidate below (§5, item 6).
 
 Before porting anything, re-check upstream for the same fix (the SYCL backend moves fast: oneDNN/MKL FA paths and Xe2 tuning landed in 2026).
