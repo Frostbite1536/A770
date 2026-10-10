@@ -15,6 +15,17 @@ add_test(NAME error_budget COMMAND error_budget)
 # volta-fa: the formats are backend-independent).
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+  # Hand checks: Q/K/V/S/P = 8192+16384+16384+8192+4096 = 53248 B.
+  add_test(NAME plan_tiles_smoke
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/bin/plan-tiles.py
+            --d 128 --br 32 --bc 64 --sg-size 8 --sgs-per-wg 4 --grf 128)
+  set_tests_properties(plan_tiles_smoke PROPERTIES PASS_REGULAR_EXPRESSION "= 53248 B")
+  # G=7: exact divisor ncols2=1 -> 7 passes; padded 8, 1*8<=32 -> 1 pass.
+  add_test(NAME decode_gqa_model_smoke
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/bin/decode-gqa-model.py
+            --d 128 --kv-heads 4 --gqa 7 --depth 32768 --tokens 1)
+  set_tests_properties(decode_gqa_model_smoke PROPERTIES
+    PASS_REGULAR_EXPRESSION "passes upstream = 7; passes padded = 1")
   add_test(NAME analyze_tbo
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/bench/analyze.py tbo
             ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tbo-perf-cpu.sql ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tbo-perf-cpu.sql)
