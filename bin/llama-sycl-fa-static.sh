@@ -10,6 +10,8 @@ CFG=$LLAMA/build-sycl-aot-cfg
 OUTDIR=${1:-$ROOT/bench/results/llama-sycl-fa-static-$(date +%Y%m%d)}
 mkdir -p "$OUTDIR"
 OUTDIR=$(cd "$OUTDIR" && pwd)
+# Whitespace-separated xe-report options, e.g. XE_REPORT_ARGS=--large-grf.
+read -r -a xe_report_args <<< "${XE_REPORT_ARGS:-}"
 
 if [ ! -f "$CFG/compile_commands.json" ]; then
     cmake -S "$LLAMA" -B "$CFG" \
@@ -26,7 +28,7 @@ fi
 {
     echo "Static IGC report: device acm-g10 (Intel Arc A770); no runtime measurements."
     echo "llama.cpp commit: $(git -C "$LLAMA" rev-parse HEAD)"
-    echo "Flags: compile database -I/-isystem/-D/-std=; xe-report AOT -O2, default GRF."
+    echo "Flags: compile database -I/-isystem/-D/-std=; xe-report AOT -O2; extra args: ${XE_REPORT_ARGS:-(none; default GRF)}."
     echo "Spill/private/SLM values in TU reports are bytes reported by IGC."
     echo "TU | kernels | max GRF | any SPILL | SIMD widths | min threads/XVE | compile wall seconds | xe-report rc"
 } > "$OUTDIR/summary.txt"
@@ -38,7 +40,7 @@ for tu in fattn-tile-instance-dkq64-dv64 fattn-tile-instance-dkq128-dv128 \
     start=$(python -c 'import time; print(time.monotonic())')
     rc=0
     python "$ROOT/bin/xe-report.py" "$LLAMA/ggml/src/ggml-sycl/template-instances/$tu.cpp" \
-        --compile-commands "$CFG/compile_commands.json" --wide > "$OUTDIR/$tu.txt" 2>&1 || rc=$?
+        --compile-commands "$CFG/compile_commands.json" --wide "${xe_report_args[@]}" > "$OUTDIR/$tu.txt" 2>&1 || rc=$?
     elapsed=$(python -c 'import sys, time; print(f"{time.monotonic() - float(sys.argv[1]):.2f}")' "$start")
     # rc=1 reports resource violations (including upstream spills); rc>=2 means compile/report failure.
     if [ "$rc" -gt 1 ]; then

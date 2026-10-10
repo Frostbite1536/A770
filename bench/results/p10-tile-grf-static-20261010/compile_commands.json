@@ -1,0 +1,14 @@
+[
+  {
+    "directory": "/tmp/p10-tile-grf-static-cfg/ggml/src/ggml-sycl",
+    "command": "/home/p51/Github/A770/tools/oneapi-2026.1/bin/icpx -DGGML_BACKEND_BUILD -DGGML_BACKEND_SHARED -DGGML_SCHED_MAX_COPIES=4 -DGGML_SHARED -DGGML_SYCL_DNNL=0 -DGGML_SYCL_F16 -DGGML_SYCL_GRAPH -DGGML_SYCL_HOST_MEM_FALLBACK -DGGML_SYCL_WARP_SIZE=16 -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -Dggml_sycl_EXPORTS -I/home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/third_party/llama.cpp/ggml/src/ggml-sycl/.. -I/home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/third_party/llama.cpp/ggml/src/../include -isystem /home/p51/Github/A770/tools/oneapi-2026.1/include -O3 -DNDEBUG -std=gnu++17 -fPIC -Xclang -fno-pch-timestamp -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-narrowing -fsycl -DMKL_ILP64 -o CMakeFiles/ggml-sycl.dir/template-instances/fattn-tile-instance-dkq128-dv128.cpp.o -c /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/third_party/llama.cpp/ggml/src/ggml-sycl/template-instances/fattn-tile-instance-dkq128-dv128.cpp",
+    "file": "/home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/third_party/llama.cpp/ggml/src/ggml-sycl/template-instances/fattn-tile-instance-dkq128-dv128.cpp",
+    "output": "ggml/src/ggml-sycl/CMakeFiles/ggml-sycl.dir/template-instances/fattn-tile-instance-dkq128-dv128.cpp.o"
+  },
+  {
+    "directory": "/tmp/p10-tile-grf-static-cfg/ggml/src/ggml-sycl",
+    "command": "/home/p51/Github/A770/tools/oneapi-2026.1/bin/icpx -DGGML_BACKEND_BUILD -DGGML_BACKEND_SHARED -DGGML_SCHED_MAX_COPIES=4 -DGGML_SHARED -DGGML_SYCL_DNNL=0 -DGGML_SYCL_F16 -DGGML_SYCL_GRAPH -DGGML_SYCL_HOST_MEM_FALLBACK -DGGML_SYCL_WARP_SIZE=16 -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -Dggml_sycl_EXPORTS -I/home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/third_party/llama.cpp/ggml/src/ggml-sycl/.. -I/home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/third_party/llama.cpp/ggml/src/../include -isystem /home/p51/Github/A770/tools/oneapi-2026.1/include -O3 -DNDEBUG -std=gnu++17 -fPIC -Xclang -fno-pch-timestamp -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-narrowing -fsycl -DMKL_ILP64 -o CMakeFiles/ggml-sycl.dir/template-instances/fattn-tile-instance-dkq256-dv256.cpp.o -c /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/third_party/llama.cpp/ggml/src/ggml-sycl/template-instances/fattn-tile-instance-dkq256-dv256.cpp",
+    "file": "/home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/third_party/llama.cpp/ggml/src/ggml-sycl/template-instances/fattn-tile-instance-dkq256-dv256.cpp",
+    "output": "ggml/src/ggml-sycl/CMakeFiles/ggml-sycl.dir/template-instances/fattn-tile-instance-dkq256-dv256.cpp.o"
+  }
+]

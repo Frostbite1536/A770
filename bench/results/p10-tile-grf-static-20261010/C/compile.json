@@ -1,0 +1,26 @@
+{
+  "device": "acm-g10",
+  "static_only": true,
+  "max_parallel_TUs": 2,
+  "source_commit": "79e2e74eb11022c1ba2e438df7f0ca2d4c10f8b6",
+  "flags": [
+    "--large-grf"
+  ],
+  "wall_seconds": 299.21,
+  "reports": [
+    {
+      "variant": "C",
+      "dimension": 128,
+      "command": "/home/p51/Github/A770/.venv/bin/python /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/bin/xe-report.py /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/third_party/llama.cpp/ggml/src/ggml-sycl/template-instances/fattn-tile-instance-dkq128-dv128.cpp --compile-commands /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/bench/results/p10-tile-grf-static-20261010/compile_commands.json --wide --large-grf",
+      "wall_seconds": 151.5,
+      "xe_report_rc": 1
+    },
+    {
+      "variant": "C",
+      "dimension": 256,
+      "command": "/home/p51/Github/A770/.venv/bin/python /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/bin/xe-report.py /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/third_party/llama.cpp/ggml/src/ggml-sycl/template-instances/fattn-tile-instance-dkq256-dv256.cpp --compile-commands /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/bench/results/p10-tile-grf-static-20261010/compile_commands.json --wide --large-grf",
+      "wall_seconds": 299.2,
+      "xe_report_rc": 1
+    }
+  ]
+}

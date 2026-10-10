@@ -1,0 +1,67 @@
+Subject: [DRAFT] SYCL FA TILE: opt into grf_size_automatic
+
+Why: upstream TILE D 128/256 spills at SIMD32 with 128 GRF on Intel Arc
+A770 (Xe-HPG, acm-g10). Let IGC choose the register file size through
+launch_fattn's existing use_large_grf template parameter in all six TILE
+launch sites. Kernel arithmetic and sub-group size remain unchanged.
+Against llama.cpp 79e2e74eb11022c1ba2e438df7f0ca2d4c10f8b6; VEC unchanged.
+static evidence only; runtime effect unmeasured
+
+diff --git a/ggml/src/ggml-sycl/fattn-tile.hpp b/ggml/src/ggml-sycl/fattn-tile.hpp
+index dcdcad88a..c0e3d4341 100644
+--- a/ggml/src/ggml-sycl/fattn-tile.hpp
++++ b/ggml/src/ggml-sycl/fattn-tile.hpp
+@@ -1085,7 +1085,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
+                 const int nwarps    = ggml_sycl_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
+                 const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+                 launch_fattn<DV, cols_per_block/ncols2, ncols2,
+-                    flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
++                    flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size, true>
+                     (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+                 return;
+             }
+@@ -1096,7 +1096,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
+                 const int nwarps    = ggml_sycl_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
+                 const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+                 launch_fattn<DV, cols_per_block/ncols2, ncols2,
+-                    flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
++                    flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size, true>
+                     (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+                 return;
+             }
+@@ -1107,7 +1107,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
+                 const int nwarps    = ggml_sycl_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
+                 const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+                 launch_fattn<DV, cols_per_block/ncols2, ncols2,
+-                    flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
++                    flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size, true>
+                     (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+                 return;
+             }
+@@ -1120,7 +1120,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
+             const int nwarps    = ggml_sycl_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
+             const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+             launch_fattn<DV, cols_per_block/ncols2, ncols2,
+-                flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
++                flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size, true>
+                 (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+             return;
+         }
+@@ -1131,7 +1131,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
+         const int nwarps    = ggml_sycl_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
+         const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+         launch_fattn<DV, cols_per_block/ncols2, ncols2,
+-            flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
++            flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size, true>
+             (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+         return;
+     }
+@@ -1141,7 +1141,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
+         const int nwarps    = ggml_sycl_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
+         const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+         launch_fattn<DV, cols_per_block/ncols2, ncols2,
+-            flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
++            flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size, true>
+             (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+         return;
+     }

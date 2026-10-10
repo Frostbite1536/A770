@@ -1,0 +1,52 @@
+All commands run with:
+export PATH=/home/p51/Github/A770/.venv/bin:$PATH;
+export A770_TOOLS=/home/p51/Github/A770/tools;
+
+CMake configuration: /tmp/p10-tile-grf-static-cfg; rc=0 (configure.txt).
+compile_commands.json retains exactly the two relevant entries from that configuration.
+xe-report uses only -I/-isystem/-D/-std= from the database, with AOT -O2 for acm-g10.
+Compiler: Intel(R) oneAPI DPC++/C++ Compiler 2026.1.1 (2026.1.1.20260724)
+A: reused saved baseline; no upstream, D64, or VEC report rerun.
+
+B source: draft patch applied; git diff --stat:
+ ggml/src/ggml-sycl/fattn-tile.hpp | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+Verified entire source against upstream plus only six template arguments.
+python bench/results/p10-tile-grf-static-20261010/run-reports.py B /tmp/p10-tile-grf-static-cfg/compile_commands.json
+Result: rc=0; at most 2 AOT TUs concurrently.
+
+git -C third_party/llama.cpp apply --reverse <absolute draft patch path>
+git -C third_party/llama.cpp diff --exit-code
+Result: rc=0; diff --stat and status --porcelain empty; source byte-for-byte equals git show HEAD.
+git -C third_party/llama.cpp apply --check <absolute draft patch path>
+Result: rc=0 against clean upstream.
+
+python bench/results/p10-tile-grf-static-20261010/run-reports.py C <absolute saved compile_commands.json path>
+Result: rc=0; --large-grf adds -ze-opt-large-register-file; at most 2 AOT TUs concurrently.
+
+Variant | D | xe-report wall seconds | xe-report rc
+B | 128 | 345.53 | 1
+Exact command: /home/p51/Github/A770/.venv/bin/python /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/bin/xe-report.py /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/third_party/llama.cpp/ggml/src/ggml-sycl/template-instances/fattn-tile-instance-dkq128-dv128.cpp --compile-commands /tmp/p10-tile-grf-static-cfg/compile_commands.json --wide
+B | 256 | 619.24 | 1
+Exact command: /home/p51/Github/A770/.venv/bin/python /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/bin/xe-report.py /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/third_party/llama.cpp/ggml/src/ggml-sycl/template-instances/fattn-tile-instance-dkq256-dv256.cpp --compile-commands /tmp/p10-tile-grf-static-cfg/compile_commands.json --wide
+B batch elapsed seconds (2 TUs parallel): 619.25
+C | 128 | 151.50 | 1
+Exact command: /home/p51/Github/A770/.venv/bin/python /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/bin/xe-report.py /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/third_party/llama.cpp/ggml/src/ggml-sycl/template-instances/fattn-tile-instance-dkq128-dv128.cpp --compile-commands /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/bench/results/p10-tile-grf-static-20261010/compile_commands.json --wide --large-grf
+C | 256 | 299.20 | 1
+Exact command: /home/p51/Github/A770/.venv/bin/python /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/bin/xe-report.py /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/third_party/llama.cpp/ggml/src/ggml-sycl/template-instances/fattn-tile-instance-dkq256-dv256.cpp --compile-commands /home/p51/Github/A770/.worktrees/p10-tile-large-grf-static/bench/results/p10-tile-grf-static-20261010/compile_commands.json --wide --large-grf
+C batch elapsed seconds (2 TUs parallel): 299.21
+
+All four xe-report rc=1 values flag remaining spills; compiles/reports succeeded.
+python -B bench/results/p10-tile-grf-static-20261010/compare-reports.py
+Result: rc=0; 34 unique TILE bodies per dimension/variant; matching A/B/C instance sets; 24 P-6 instances.
+Only actual lauch_kernel TILE bodies extracted; helper launch kernels excluded.
+SIMD32 confirmed, DPAS/FP64 counts both zero for all extracted TILE bodies; static SLM matches A.
+
+bin/check-forbidden.sh
+Result: ok; rc=0.
+shellcheck -x bin/*.sh
+Result: no diagnostics; rc=0.
+git diff --check
+Result: no diagnostics; rc=0.
+
+No runtime measurements; spill cost versus halved reported threads/XVE needs an A770 A/B.
