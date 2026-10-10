@@ -55,3 +55,9 @@ The script and patch exist, the FA suite (or documented subset) has run on the C
 
 ## Manager decision (round 2, after your TBB stop)
 Your stop was correct. `tbb-devel` (TBB 2023.1 CMake config) is now installed in `/home/p51/Github/A770/tools/oneapi-2026.1`. The manager verified that the configure command from "Design" now completes (`Build files have been written`). Continue from where you stopped: your test-only patch is already applied in `third_party/llama.cpp`. This machine has 8 cores: build with `-j 8`. The first full ggml-sycl build is long; if a command times out, rerun it (ninja resumes). Everything else in the ticket is unchanged.
+
+## Manager decision (round 3, after your `pown` stop)
+Diagnosis: `_Z4pownDv32_fDv32_iS_` comes from `get_alibi_slope` (`ggml/src/ggml-sycl/common.hpp:765-777`, `dpct::pow(float, int)` → `sycl::pown`), compiled into TILE and VEC. The CPU JIT vectorises at sub-group 32 and its builtin library has no 32-wide `pown`. The function returns 1.0f before reaching `pown` whenever `max_bias <= 0`.
+1. **Allowed (one compile-time exception to "byte-identical when unset")**: in the test-only patch, replace `return dpct::pow(base, exph);` with a scalar loop (`float r = 1.0f; for (int i = 0; i < exph; ++i) r *= base; return r;`). Comment it in the code and in the patch header: CPU-JIT workaround, ALiBi slope only, P-6 does not pad under ALiBi, the rounding difference is within test tolerance. Nothing else in kernel code may change.
+2. **Do not pursue the `-cl-opt-disable` numerical failures.** Optimisation stays ON.
+3. **Gate before the full suite**: after the rebuild, run one VEC f16 case and one TILE case (D 128, GQA 4, a few tokens, mask on). If both pass, continue with the original Steps 2–5. If either fails numerically with optimisation on, STOP: report the exact case string, the error value the test prints, and which kernel ran (`GGML_SYCL_MKL_FA_DEBUG=1`), and do not try further workarounds.
