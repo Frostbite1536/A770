@@ -14,21 +14,25 @@ acm-g10 the SIMD16 OpenCL DPAS builtin compiles WITHOUT error and WITHOUT a DPAS
 Exit 2 if the compile fails.
 
 Usage: .venv/bin/python bin/xe-report.py src/attention/foo.cpp [-D NAME=VAL ...] [--large-grf]
-           [--expect-dpas REGEX] [--keep DIR]
+           [--expect-dpas REGEX] [--keep DIR] [--compile-commands PATH] [--wide]
+Tool root: A770_TOOLS (default: <repo>/tools).
 Templates are only compiled when instantiated: add explicit instantiations in the file under test.
 """
 import argparse
+import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-NEO = ROOT / "tools/neo"
-ONEAPI = ROOT / "tools/oneapi-2026.1"
+TOOLS = pathlib.Path(os.environ.get("A770_TOOLS", ROOT / "tools"))
+NEO = TOOLS / "neo"
+ONEAPI = TOOLS / "oneapi-2026.1"
 DEVICE = "acm-g10"
 SLM_LIMIT = 64 * 1024
 # Source text that means "this file wants XMX"; if it matches and no kernel emits DPAS, that is a failure.
@@ -48,9 +52,43 @@ def tool_env() -> dict:
     return env
 
 
-def compile_kernels(src: pathlib.Path, defines: list[str], large_grf: bool, dump: pathlib.Path, env: dict):
+def compile_flags(database: pathlib.Path, src: pathlib.Path) -> list[str]:
+    """Keep only include paths, defines and the language standard for this source."""
+    for entry in json.loads(database.read_text()):
+        directory = pathlib.Path(entry["directory"])
+        if not directory.is_absolute():
+            directory = database.resolve().parent / directory
+        if (directory / entry["file"]).resolve() != src:
+            continue
+        args = entry.get("arguments")
+        if args is None:
+            args = shlex.split(entry["command"])
+        flags = []
+        i = 1  # Skip the compiler executable.
+        while i < len(args):
+            arg = args[i]
+            option = next((p for p in ("-isystem", "-I", "-D") if arg.startswith(p)), None)
+            if option:
+                value = arg[len(option):]
+                if not value:
+                    i += 1
+                    if i == len(args):
+                        raise ValueError(f"missing value for {option} in {database}")
+                    value = args[i]
+                if option in ("-I", "-isystem"):
+                    value = str((directory / value).resolve())
+                flags.extend([option, value])
+            elif arg.startswith("-std="):
+                flags.append(arg)
+            i += 1
+        return flags
+    raise ValueError(f"no compile_commands entry for {src} in {database}")
+
+
+def compile_kernels(src: pathlib.Path, defines: list[str], large_grf: bool, dump: pathlib.Path, env: dict,
+                    flags: list[str]):
     env = dict(env, IGC_DumpToCustomDir=str(dump))
-    incs = [f"-I{ROOT / 'include'}"] + [f"-D{d}" for d in defines]
+    incs = [f"-I{ROOT / 'include'}", *flags] + [f"-D{d}" for d in defines]
     if src.suffix == ".cl":
         opts = incs + (["-cl-intel-256-GRF-per-thread"] if large_grf else [])
         cmd = [str(NEO / "bin/ocloc"), "compile", "-file", str(src), "-device", DEVICE,
@@ -124,12 +162,20 @@ def main() -> int:
     ap.add_argument("--large-grf", action="store_true", help="256-GRF mode (halves threads per XVE)")
     ap.add_argument("--expect-dpas", metavar="REGEX", help="kernels whose name matches must emit DPAS")
     ap.add_argument("--keep", type=pathlib.Path, help="copy the IGC dump (asm, zeinfo) here")
+    ap.add_argument("--compile-commands", type=pathlib.Path, metavar="PATH",
+                    help="use this source's -I, -isystem, -D and -std= flags from a compile database")
+    ap.add_argument("--wide", action="store_true", help="show full demangled kernel names")
     a = ap.parse_args()
 
+    try:
+        flags = compile_flags(a.compile_commands, a.src.resolve()) if a.compile_commands else []
+    except (OSError, ValueError, KeyError) as e:
+        print(f"compile_commands: {e}", file=sys.stderr)
+        return 2
     env = tool_env()
     with tempfile.TemporaryDirectory() as td:
         dump = pathlib.Path(td)
-        rc, log = compile_kernels(a.src.resolve(), a.defines, a.large_grf, dump, env)
+        rc, log = compile_kernels(a.src.resolve(), a.defines, a.large_grf, dump, env, flags)
         # IGC reports SIMD retries and spill estimates as warnings; they matter, so always show them.
         for line in log.splitlines():
             if re.search(r"error|warning|spill", line, re.I):
@@ -168,7 +214,8 @@ def main() -> int:
         bad |= bool(flags)
         if k["private_size"]:
             flags.append("(private mem)")
-        print(f"               {name[:56]:56} {k['simd_size']:>4} {k['grf_count']:>4} {k['eu_thread_count']:>3} {k['spill_size']:>6} "
+        label = name if a.wide else name[:56]
+        print(f"               {label:56} {k['simd_size']:>4} {k['grf_count']:>4} {k['eu_thread_count']:>3} {k['spill_size']:>6} "
               f"{k['private_size']:>7} {k['slm_size']:>6} {dpas:>4} {df:>4} {' '.join(flags)}")
     if want_xmx and total_dpas == 0:
         print("NO-DPAS: the source requests XMX but no kernel emitted a DPAS instruction "

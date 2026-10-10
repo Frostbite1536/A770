@@ -40,7 +40,7 @@ endif()
 # bin/xe-report.py must keep catching the Xe-HPG traps it exists for. Needs ocloc (bin/setup-dev.sh);
 # skipped (code 77) without it.
 if(Python3_Interpreter_FOUND)
-  foreach(case dpas_simd8 large_grf dpas_simd16_silent spill fp64 block2d slm sycl_joint_matrix)
+  foreach(case dpas_simd8 large_grf dpas_simd16_silent spill fp64 block2d slm sycl_joint_matrix compile_commands)
     add_test(NAME xe_report_${case}
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_xe_report.py ${case})
     set_tests_properties(xe_report_${case} PROPERTIES SKIP_RETURN_CODE 77)

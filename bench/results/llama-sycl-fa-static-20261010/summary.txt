@@ -1,0 +1,10 @@
+Static IGC report: device acm-g10 (Intel Arc A770); no runtime measurements.
+llama.cpp commit: 79e2e74eb11022c1ba2e438df7f0ca2d4c10f8b6
+Flags: compile database -I/-isystem/-D/-std=; xe-report AOT -O2, default GRF.
+Spill/private/SLM values in TU reports are bytes reported by IGC.
+TU | kernels | max GRF | any SPILL | SIMD widths | min threads/XVE | compile wall seconds | xe-report rc
+fattn-tile-instance-dkq64-dv64 | 141 | 128 | yes | 8,16,32 | 8 | 69.75 | 1
+fattn-tile-instance-dkq128-dv128 | 141 | 128 | yes | 8,16,32 | 8 | 139.23 | 1
+fattn-tile-instance-dkq256-dv256 | 141 | 128 | yes | 8,16,32 | 8 | 291.64 | 1
+fattn-vec-instance-f16-f16 | 118 | 256 | yes | 8,16,32 | 4 | 71.84 | 1
+fattn-vec-instance-q8_0-q8_0 | 118 | 256 | yes | 8,16,32 | 4 | 81.53 | 1
