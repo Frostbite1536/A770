@@ -1,6 +1,6 @@
 # Ticket p4-xe-planning-models: Xe-HPG tile planner + GQA decode cost model (static arithmetic, no GPU)
 
-Your current directory is a git worktree of A770 (branch `p4-xe-planning-models`, based on `main` @ `c20a5c0`). Work only here.
+Your current directory is a git worktree of A770 (branch `p4-xe-planning-models`, based on `main` @ `aba801f`). Work only here.
 
 ## Rules (mandatory, repeated in every ticket)
 - Target is Intel Arc A770 (Xe-HPG, acm-g10) ONLY. This ticket writes Python planning tools, no kernels.
