@@ -1,0 +1,30 @@
+name: ci
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Forbidden non-Xe-HPG features
+        run: bin/check-forbidden.sh
+      - name: Toolchain (venv + ocloc/IGC for static acm-g10 reports, pinned and checksummed)
+        run: |
+          bin/setup-dev.sh
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - name: Shellcheck
+        run: shellcheck -x bin/*.sh bench/*.sh
+      - name: CPU build and tests (incl. xe-report fixtures; the SYCL fixture skips without WITH_DPCPP)
+        run: |
+          cmake -S . -B build -G Ninja
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+      - name: Static acm-g10 reports (fails on spills / SLM > 64 KB / missing DPAS)
+        run: |
+          shopt -s nullglob globstar
+          rc=0
+          for f in src/**/*.cl; do echo "== $f"; python bin/xe-report.py "$f" || rc=1; done
+          for f in src/**/*.cpp; do echo "== $f (SYCL: needs WITH_DPCPP=1, skipped in CI)"; done
+          exit $rc
+  # Timing and parity on a real A770 run manually on the box; hosted runners have no Arc GPU.

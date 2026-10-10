@@ -1,0 +1,7 @@
+# One GGUF path per line; copy to bench/models.txt (gitignored: local paths).
+# Pick models that differ in head dim and GQA ratio, since those drive FA kernel selection, and that fit in
+# the card's VRAM with room for a 16K context (16 GB A770; halve for the 8 GB card):
+# /models/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf   d=128, GQA 4 (power of two: control)
+# /models/Qwen2.5-7B-Instruct-Q8_0.gguf          d=128, GQA 7 (28 Q / 4 KV heads: SYCL TILE streams K/V 7x)
+# /models/Qwen2.5-14B-Instruct-Q4_K_M.gguf       d=128, GQA 5 (40 / 8)
+# /models/gemma-2-9b-it-Q6_K.gguf                d=256, GQA 2, softcap
