@@ -78,8 +78,8 @@ AOT-compile the patched `fattn-tile.hpp` instances for acm-g10 (`-DGGML_SYCL_DEV
 ## Accept if (A770, `bench/patches/run.sh`, variant `p6` vs `upstream`)
 
 1. **Correctness**: `test-backend-ops test -o FLASH_ATTN_EXT` on SYCL0 has no new failures; the new GQA 3/5/6/7 block passes.
-2. **Kernel**: on the new block's G 5/6/7 cases at 1–8 tokens, the median over ≥ 3 interleaved rounds is ≥ 1.3× faster. No existing case (G 1/2/4/8) is more than 3% slower.
-3. **End to end**: `llama-bench -fa on -p 1,4,8 -d 16384` on Qwen2.5-7B (G 7) improves ≥ 10%. Llama-3.1-8B (G 4, never padded) changes by less than ±3%.
+2. **Kernel**: on the new block's G 5/6/7 cases at 1–4 tokens (where padding applies: tokens × 8 ≤ 32), and G 3 at 1–8, the median over ≥ 3 interleaved rounds is ≥ 1.3× faster. Cases beyond the threshold must be unchanged (±3%). No existing case (G 1/2/4/8) is more than 3% slower.
+3. **End to end**: `llama-bench -fa on -p 1,4 -d 16384` on Qwen2.5-7B (G 7) improves ≥ 10%, and `-p 8` (not padded) is unchanged (±3%). Llama-3.1-8B (G 4, never padded) changes by less than ±3%.
 4. **Static**: no new spills in the TILE instances (`bin/llama-sycl-fa-static.sh`, patched vs upstream).
 
 Reject, or retune `GGML_SYCL_FATTN_TILE_PAD_MAX_COLS`, if 2 or 3 fails. If padding loses at 8 tokens but wins at 1–4, lower the threshold rather than dropping the patch. These thresholds are manager decisions made before the measurement, so the result cannot move them.
