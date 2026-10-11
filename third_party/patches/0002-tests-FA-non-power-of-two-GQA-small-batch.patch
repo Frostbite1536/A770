@@ -1,0 +1,33 @@
+Subject: [PATCH 2/2] tests: cover non-power-of-two GQA at small batches
+
+Exercise two KV heads at GQA ratios 3, 5, 6 and 7 with F16 caches,
+attention sinks and Q8_0 caches so backends can validate padded head tiles.
+
+Tested on: Intel OpenCL CPU device only
+
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 4e3c6942b..969d08ee6 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -11695,6 +11695,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+     // KV not a multiple of the compaction workgroup size.
+     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 1, { 8, 1}, 5003, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,  512));
+ 
++    // Non-power-of-two GQA ratios at small batch sizes: backends may pad the Q heads per tile
++    // to the next power of two and mask the extra heads (including their attention sinks).
++    for (int hs : { 128, 256 }) {
++        for (int gqa : { 3, 5, 6, 7 }) {
++            for (int nb : { 1, 2, 3, 4, 8, 16 }) {
++                for (bool sinks : { false, true }) {
++                    test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 2, {gqa, 1}, 4096, nb, true, sinks, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
++                }
++            }
++            for (int nb : { 3, 8 }) {
++                test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 2, {gqa, 1}, 4096, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
++            }
++        }
++    }
++
+     // Sparse gather: native block sizes, padded slots, and head/batch strides.
+     for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL}) {
+         test_cases.emplace_back(new test_flash_attn_ext(128, 96, 2, {8, 2}, 5003, 3, true, false, 0, 0, GGML_PREC_F32, type, type, {0, 1, 2, 3}, true, false, 257));

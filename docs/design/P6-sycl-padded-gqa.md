@@ -1,6 +1,6 @@
 # P-6 design: padded GQA in the SYCL TILE FlashAttention kernel
 
-Status: **designed, not implemented.** Harness for correctness without an Arc GPU: `bin/sycl-cpu-tbo.sh` (p6a, SYCL on the OpenCL CPU device, done). Implementation: ticket `p6b-sycl-tile-padded-gqa`. Owner decision points are marked **Decision**.
+Status: **implemented** (patches 0001/0002, CPU-device correctness; A770 timing not run). Harness for correctness without an Arc GPU: `bin/sycl-cpu-tbo.sh` (p6a, SYCL on the OpenCL CPU device, done). Implementation: ticket `p6b-sycl-tile-padded-gqa`. Owner decision points are marked **Decision**.
 
 Port of volta-fa P-6 (`~/Github/volta-fa/docs/design/P6-small-batch-gqa.md`, patches 0001/0002). The mechanism is the same, but where the fix lands differs. On Volta the MMA kernel already masked phantom heads and only dispatch changed. On Arc the SYCL **TILE** kernel has no phantom-head support (neither does CUDA's TILE kernel), so the kernel changes too.
 
@@ -68,12 +68,18 @@ Selection (`fattn.cpp:130, 181-190`) and TILE dispatch (`fattn-tile.hpp:1169`) c
 Add volta-fa P-6's test block to `tests/test-backend-ops.cpp` unchanged: hs 128/256 × G 3/5/6/7 × nb 1/2/3/4/8/16 × sinks off/on, 2 KV heads, kv 4096, mask on. Two KV heads catch phantom writes that alias the next KV head; sinks catch the out-of-bounds sink read. Add q8_0 K/V at nb 3 and 8, since quantised caches reach TILE on Arc for B ≥ 3. Run them through `bin/sycl-cpu-tbo.sh` (CPU SYCL device: correctness only).
 
 Required negative controls (each must FAIL, then pass after revert):
-- dispatch padding on, phantom output write NOT skipped → aliasing caught by the 2-KV-head cases;
-- phantom sink read not guarded → caught by sinks cases, or by an out-of-bounds read showing as wrong output.
+- dispatch padding on, phantom output write NOT skipped → aliasing caught by the 2-KV-head cases (p6b: ERR 0.29, then SIGSEGV; recovered);
+- padding on, `head0` from the pre-patch formula (`z*ncols2 - sequence*ne02`) → wrong Q heads and output rows for KV head 1 (p6b, manager rerun).
+
+Not observable by a numerical test (p6b, recorded rather than counted as a pass):
+- the phantom sink guard. A phantom column's sink only changes that column's own max and sum, and the column is never written. Removing the guard is visible only as a read past the end of `sinks` for the last KV head, which a CPU run does not report (8/8 still passed). The guard is verified by code review.
+- K/V base from `head0 / gqa_ratio` instead of `kv_head`. Padding implies ncols2 ≥ G, so `ntiles_z_gqa` = 1 and the two are equal (the ticket's original control (c); 4/4 passed before the worker stopped).
 
 ## Static check
 
 AOT-compile the patched `fattn-tile.hpp` instances for acm-g10 (`-DGGML_SYCL_DEVICE_ARCH=acm-g10` + IGC dumps) and compare SIMD, GRF and spill against the unpatched build for the ncols2 = 4/8 instances. Expected: unchanged or one or two more GRFs for the extra index math. Any new spill is a failing result (INV-PERF-003).
+
+**Result (p6b, `bench/results/p6b-static-acm-g10-20261010/comparison.txt`):** all 77 TILE instances keep SIMD32, 128 GRF and 8 threads/XVE. Every instance already spills upstream (P-10), so no instance newly spills. But spill bytes rise in 43 instances, by at most 640 B (+8.4%, `<128,128,4,2,true>`), and fall in 12. Instances P-6 dispatches to: `<128,128,2,4>` +352/+576 B, `<128,128,1,8>` +224/+544 B, `<128,128,4,8>` +256/+288 B, `<256,256,4,8>` +192/+288 B (softcap off/on). The strict reading of criterion 4 is met (no new spills). The spirit is not fully met, because spills grow slightly. **Decision (owner, after the A770 run):** criterion 2 (no existing case > 3% slower) measures whether this matters.
 
 ## Accept if (A770, `bench/patches/run.sh`, variant `p6` vs `upstream`)
 

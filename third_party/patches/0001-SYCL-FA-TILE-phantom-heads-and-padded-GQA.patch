@@ -1,0 +1,115 @@
+Subject: [PATCH 1/2] SYCL: FA TILE, phantom heads and padded GQA for small batches
+
+The TILE kernel packs ncols2 Q heads of one KV head per work-group, but it
+derives the KV head as head0 / gqa_ratio, so ncols2 must divide the GQA ratio.
+For G = 3, 5, 6 and 7, dispatch therefore falls back to ncols2 = 1 or 2 and
+streams each KV head's K/V up to G times. This includes F16 single-token
+decode on such models.
+
+This patch uses KV-head-major work-group indexing, as CUDA's MMA kernel does,
+and masks phantom heads:
+- zero Q;
+- no sink read;
+- no output or dst_meta write.
+When ncols2 divides G the mapping is identical to before. For non-power-of-two
+G < 8, while tokens * next_pow2(G) <= GGML_SYCL_FATTN_TILE_PAD_MAX_COLS (32),
+dispatch then pads ncols2 to next_pow2(G), so K/V is streamed once. It adds no
+new template instances. DV = 512 is unchanged.
+
+Tested on: Intel OpenCL CPU device only (correctness). A770 timing not run.
+
+diff --git a/ggml/src/ggml-sycl/fattn-tile.hpp b/ggml/src/ggml-sycl/fattn-tile.hpp
+index dcdcad8..e5e5d5d 100644
+--- a/ggml/src/ggml-sycl/fattn-tile.hpp
++++ b/ggml/src/ggml-sycl/fattn-tile.hpp
+@@ -9,6 +9,9 @@
+ 
+ namespace syclex = sycl::ext::oneapi::experimental;
+ 
++// Tune this column budget from A770 measurements.
++#define GGML_SYCL_FATTN_TILE_PAD_MAX_COLS 32
++
+ #define GGML_SYCL_FATTN_TILE_CONFIG_CASE(DKQ_, DV_, ncols_, nthreads, occupancy, nbatch_fa, nbatch_K) \
+     if (DKQ == (DKQ_) && DV == (DV_) && ncols == (ncols_)) {                                          \
+         static_assert((nthreads)          <= 512, "bad nthreads");                                    \
+@@ -723,13 +726,18 @@ static void flash_attn_tile(const char *  Q,
+ 
+     const int col_Q_0 = item_ct1.get_group(2) * ncols1;  // Index of the first Q column for this SYCL block to work on.
+ 
+-    const int           sequence  = item_ct1.get_group(0) / (ne02 / ncols2);
+-    const int           head0     = item_ct1.get_group(0) * ncols2 - sequence * ne02;  // == item_ct1.get_group(0) % (ne02/ncols2)
+     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
++    const int ntiles_z_gqa = (gqa_ratio + ncols2 - 1) / ncols2;
++    const int z        = item_ct1.get_group(0);
++    const int sequence = z / (ntiles_z_gqa * ne12);
++    const int kv_head  = (z / ntiles_z_gqa) % ne12;
++    const int zt_gqa   = z % ntiles_z_gqa;
++    // If ncols2 divides G, ntiles_z_gqa = G/ncols2 and head0 = z*ncols2 - sequence*ne02.
++    const int head0    = kv_head * gqa_ratio + zt_gqa * ncols2;
+     const float * Q_f  = (const float *) (Q + nb03*sequence + nb02* head0);
+-    const sycl::half2 * K_h2      = (const sycl::half2 *) (K + nb13 * sequence + nb12 * (head0 / gqa_ratio));
++    const sycl::half2 * K_h2      = (const sycl::half2 *) (K + nb13 * sequence + nb12 * kv_head);
+     const sycl::half2 * V_h2 =
+-        (const sycl::half2 *) (V + nb23 * sequence + nb22 * (head0 / gqa_ratio));  // K and V have same shape
++        (const sycl::half2 *) (V + nb23 * sequence + nb22 * kv_head);  // K and V have same shape
+ 
+     const sycl::half * maskh = mask ? (const sycl::half *) (mask + nb33 * (sequence % ne33)) : nullptr;
+ 
+@@ -823,10 +831,13 @@ static void flash_attn_tile(const char *  Q,
+                 i0 + (item_ct1.get_local_id(1) % np) * (warp_size * cpy_ne_D) + item_ct1.get_local_id(2) * cpy_ne_D <
+                     DKQ) {
+                 __dpct_align__(16) float tmp_f[cpy_ne_D] = { 0.0f };
+-                ggml_sycl_memcpy_1<sizeof(tmp_f)>(
+-                    tmp_f, &Q_f[c * (nb02 / sizeof(float)) + fastmodulo(col_Q_0 + j, ne01) * (nb01 / sizeof(float)) +
+-                                i0 + (item_ct1.get_local_id(1) % np) * (warp_size * cpy_ne_D) +
+-                                item_ct1.get_local_id(2) * cpy_ne_D]);
++                // Phantom heads retain zeros in Q_tmp without reading global Q.
++                if (ncols2 == 1 || zt_gqa * ncols2 + c < gqa_ratio) {
++                    ggml_sycl_memcpy_1<sizeof(tmp_f)>(
++                        tmp_f, &Q_f[c * (nb02 / sizeof(float)) + fastmodulo(col_Q_0 + j, ne01) * (nb01 / sizeof(float)) +
++                                    i0 + (item_ct1.get_local_id(1) % np) * (warp_size * cpy_ne_D) +
++                                    item_ct1.get_local_id(2) * cpy_ne_D]);
++                }
+ 
+ #pragma unroll
+                 for (int i1 = 0; i1 < cpy_ne_D; ++i1) {
+@@ -974,6 +985,9 @@ static void flash_attn_tile(const char *  Q,
+ #pragma unroll
+         for (int jc0 = 0; jc0 < cpw; ++jc0) {
+             const int   jc   = jc0 + (item_ct1.get_local_id(1) / np) * cpw;
++            if (ncols2 > 1 && zt_gqa * ncols2 + jc % ncols2 >= gqa_ratio) {
++                continue;
++            }
+             const float sink = ((const float *) sinks)[head0 + jc % ncols2];
+ 
+             float       KQ_max_new_j = sycl::fmax((float) KQ_max[jc0], sink);
+@@ -1007,6 +1021,10 @@ static void flash_attn_tile(const char *  Q,
+         const int j = jc / ncols2;
+         const int c = jc % ncols2;
+ 
++        if (ncols2 > 1 && zt_gqa * ncols2 + c >= gqa_ratio) {
++            continue;
++        }
++
+         if (ncols1 > 1 && col_Q_0 + j >= int(ne01.z())) {
+             return;
+         }
+@@ -1194,6 +1212,18 @@ static void launch_fattn_tile_switch_ncols2(ggml_backend_sycl_context & ctx, ggm
+     }
+ 
+     if constexpr (DV <= 256) {
++        // For non-power-of-two G < 8, the next power of two is 4 or 8.
++        const int padded_gqa_ratio = gqa_ratio <= 4 ? 4 : 8;
++        if (use_gqa_opt && (gqa_ratio & (gqa_ratio - 1)) != 0 && gqa_ratio < 8 &&
++            Q->ne[1] * padded_gqa_ratio <= GGML_SYCL_FATTN_TILE_PAD_MAX_COLS) {
++            if (padded_gqa_ratio == 4) {
++                launch_fattn_tile_switch_ncols1<DKQ, DV, 4, use_logit_softcap>(ctx, dst);
++            } else {
++                launch_fattn_tile_switch_ncols1<DKQ, DV, 8, use_logit_softcap>(ctx, dst);
++            }
++            return;
++        }
++
+         if (use_gqa_opt && gqa_ratio % 8 == 0) {
+             launch_fattn_tile_switch_ncols1<DKQ, DV, 8, use_logit_softcap>(ctx, dst);
+             return;

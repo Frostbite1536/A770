@@ -5,7 +5,8 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 export A770_TOOLS=${A770_TOOLS:-$ROOT/tools}
 O=$A770_TOOLS/oneapi-2026.1
-LLAMA=$ROOT/third_party/llama.cpp
+# LLAMA overrides the llama.cpp tree (e.g. a clean clone with a patch series applied).
+LLAMA=${LLAMA:-$ROOT/third_party/llama.cpp}
 CFG=$LLAMA/build-sycl-aot-cfg
 OUTDIR=${1:-$ROOT/bench/results/llama-sycl-fa-static-$(date +%Y%m%d)}
 mkdir -p "$OUTDIR"
