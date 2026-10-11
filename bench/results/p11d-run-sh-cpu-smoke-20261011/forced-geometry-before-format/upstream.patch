@@ -1,0 +1,254 @@
+diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
+index c7e7c47a7..312713dab 100644
+--- a/ggml/src/ggml-cpu/ops.cpp
++++ b/ggml/src/ggml-cpu/ops.cpp
+@@ -8940,7 +8940,8 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
+         ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*DV); // (temporary) FP16 VKQ accumulator
+         ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*DV); // (temporary) buffer for Q converted to quantized/FP16
+ 
+-        if (v->type == GGML_TYPE_F16) {
++        // Keep the reference output accumulator in FP32, including for F16 V.
++        if (v->type == GGML_TYPE_F16 && !params->use_ref) {
+             memset(VKQ16, 0, DV*sizeof(ggml_fp16_t));
+         } else {
+             memset(VKQ32, 0, DV*sizeof(float));
+@@ -8989,7 +8990,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
+ 
+             const char * v_data = ((const char *) v->data + (ic*nbv1 + iv2*nbv2 + iv3*nbv3));
+ 
+-            if (v->type == GGML_TYPE_F16) {
++            if (v->type == GGML_TYPE_F16 && !params->use_ref) {
+                 if (s > M) {
+                     // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
+                     M = s;
+@@ -9030,7 +9031,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
+             S = S*ms + vs; // scale and increment sum with partial sum
+         }
+ 
+-        if (v->type == GGML_TYPE_F16) {
++        if (v->type == GGML_TYPE_F16 && !params->use_ref) {
+             for (int64_t d = 0; d < DV; ++d) {
+                 VKQ32[d] = GGML_CPU_FP16_TO_FP32(VKQ16[d]);
+             }
+diff --git a/ggml/src/ggml-sycl/CMakeLists.txt b/ggml/src/ggml-sycl/CMakeLists.txt
+index 1697ecd95..d91bd0606 100644
+--- a/ggml/src/ggml-sycl/CMakeLists.txt
++++ b/ggml/src/ggml-sycl/CMakeLists.txt
+@@ -171,7 +171,13 @@ endif()
+ if (GGML_SYCL_TARGET STREQUAL "INTEL")
+     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
+     if (NOT GGML_SYCL_DEVICE_ARCH)
+-        target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
++        # The OpenCL CPU JIT rejects this Intel GPU build option.
++        if (NOT "$ENV{GGML_SYCL_TEST_CPU}" STREQUAL "1")
++            target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
++        else()
++            # Keep CPU JIT programs small; leave compiler optimization enabled.
++            target_link_options(ggml-sycl PRIVATE -fsycl-device-code-split=per_kernel)
++        endif()
+     else()
+         message(STATUS "Skipping -ze-intel-greater-than-4GB-buffer-required for spir64_gen AOT")
+     endif()
+diff --git a/ggml/src/ggml-sycl/common.hpp b/ggml/src/ggml-sycl/common.hpp
+index 475509372..716d7a80a 100644
+--- a/ggml/src/ggml-sycl/common.hpp
++++ b/ggml/src/ggml-sycl/common.hpp
+@@ -774,7 +774,11 @@ static __dpct_inline__ float get_alibi_slope(const float    max_bias,
+     const float base = h < n_head_log2 ? m0 : m1;
+     const int   exph = h < n_head_log2 ? h + 1 : 2*(h - n_head_log2) + 1;
+ 
+-    return dpct::pow(base, exph);
++    // CPU-JIT workaround: avoid missing 32-wide pown for ALiBi slopes.
++    // P-6 does not pad under ALiBi; the rounding difference is within test tolerance.
++    float r = 1.0f;
++    for (int i = 0; i < exph; ++i) r *= base;
++    return r;
+ }
+ 
+ static const sycl::uint3 init_fastdiv_values(uint32_t d) {
+diff --git a/ggml/src/ggml-sycl/dpct/helper.hpp b/ggml/src/ggml-sycl/dpct/helper.hpp
+index 85af4cab6..efde39e20 100644
+--- a/ggml/src/ggml-sycl/dpct/helper.hpp
++++ b/ggml/src/ggml-sycl/dpct/helper.hpp
+@@ -909,6 +909,20 @@ namespace dpct
+         }
+ 
+         inline std::string get_preferred_gpu_platform_name() {
++            // Local correctness harness only; the default device becomes SYCL0.
++            const char * test_cpu = getenv("GGML_SYCL_TEST_CPU");
++            if (test_cpu && std::strcmp(test_cpu, "1") == 0) {
++                const auto device = sycl::device(sycl::default_selector_v);
++                const auto platform = device.get_platform();
++                const auto name = platform.get_info<sycl::info::platform::name>();
++                if (!device.is_cpu() || device.get_backend() != sycl::backend::opencl ||
++                    name.find("Intel") == std::string::npos) {
++                    throw std::runtime_error("GGML_SYCL_TEST_CPU=1 requires an Intel OpenCL CPU as SYCL0");
++                }
++                std::cerr << "GGML_SYCL_TEST_CPU: SYCL0 is Intel OpenCL CPU: "
++                          << device.get_info<sycl::info::device::name>() << std::endl;
++                return name;
++            }
+             std::string result;
+ 
+             std::string filter = "";
+diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
+index d2c1a1a44..37c5d9bf4 100644
+--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
+@@ -247,6 +247,26 @@ static ggml_sycl_device_info ggml_sycl_init() {
+ 
+         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
+         info.devices[i].max_wg_per_cu = info.max_work_group_sizes[i] / prop.get_max_compute_units();
++        const char * test_cpu = getenv("GGML_SYCL_TEST_CPU");
++        if (test_cpu && std::strcmp(test_cpu, "1") == 0 && device.is_cpu()) {
++            // CPU compute units are not groups of 16 Xe cores.
++            info.devices[i].nsm = prop.get_max_compute_units();
++            const auto positive_env = [](const char * name, int fallback) {
++                const char * value = getenv(name);
++                if (!value || !*value) return fallback;
++                int parsed = 0;
++                for (const char * p = value; *p; ++p) {
++                    if (*p < '0' || *p > '9' ||
++                        parsed > (std::numeric_limits<int>::max() - (*p - '0')) / 10) return fallback;
++                    parsed = 10 * parsed + (*p - '0');
++                }
++                return parsed > 0 ? parsed : fallback;
++            };
++            info.devices[i].nsm = positive_env("GGML_SYCL_TEST_NSM", info.devices[i].nsm);
++            info.devices[i].max_wg_per_cu = positive_env("GGML_SYCL_TEST_MAX_WG_PER_CU", info.devices[i].max_wg_per_cu);
++            fprintf(stderr, "GGML_SYCL_TEST_CPU: launch geometry nsm=%d max_wg_per_cu=%d\n",
++                    info.devices[i].nsm, info.devices[i].max_wg_per_cu);
++        }
+         info.devices[i].hw_info = get_device_hw_info(&device);
+ 
+         // Only check GPU devices; CPU devices use OpenCL and would otherwise
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 4e3c6942b..1af3f21cc 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -8350,9 +8350,14 @@ struct test_flash_attn_ext : public test_case {
+     const bool kv_view; // create K/V as views of a larger buffer (like a KV cache)
+     const bool v_is_view_of_k;
+     const int64_t n_kv_max;
++    const float v_bias;
+ 
+     std::string vars() override {
+-        return VARS_TO_STR17(hsk, hsv, nh, nr23, kv, nb, mask, sinks, max_bias, logit_softcap, prec, type_K, type_V, permute, kv_view, v_is_view_of_k, n_kv_max);
++        std::string params = VARS_TO_STR17(hsk, hsv, nh, nr23, kv, nb, mask, sinks, max_bias, logit_softcap, prec, type_K, type_V, permute, kv_view, v_is_view_of_k, n_kv_max);
++        if (v_bias != 0.0f) {
++            params += "," + VAR_TO_STR(v_bias);
++        }
++        return params;
+     }
+ 
+     double max_nmse_err() override {
+@@ -8369,9 +8374,9 @@ struct test_flash_attn_ext : public test_case {
+     test_flash_attn_ext(int64_t hsk = 128, int64_t hsv = 128, int64_t nh = 32, std::array<int64_t, 2> nr23 = {1, 1}, int64_t kv = 96, int64_t nb = 8,
+                         bool mask = true, bool sinks = false, float max_bias = 0.0f, float logit_softcap = 0.0f, ggml_prec prec = GGML_PREC_F32,
+                         ggml_type type_K = GGML_TYPE_F16, ggml_type type_V = GGML_TYPE_F16, std::array<int32_t, 4> permute = {0, 1, 2, 3},
+-                        bool kv_view = true, bool v_is_view_of_k = false, int64_t n_kv_max = 0)
++                        bool kv_view = true, bool v_is_view_of_k = false, int64_t n_kv_max = 0, float v_bias = 0.0f)
+         : hsk(hsk), hsv(hsv), nh(nh), nr23(nr23), kv(kv), nb(nb), mask(mask), sinks(sinks), max_bias(max_bias), logit_softcap(logit_softcap), prec(prec),
+-          type_K(type_K), type_V(type_V), permute(permute), kv_view(kv_view), v_is_view_of_k(v_is_view_of_k), n_kv_max(n_kv_max) {}
++          type_K(type_K), type_V(type_V), permute(permute), kv_view(kv_view), v_is_view_of_k(v_is_view_of_k), n_kv_max(n_kv_max), v_bias(v_bias) {}
+ 
+     ggml_tensor * build_graph(ggml_context * ctx) override {
+         const int64_t hsk_padded = GGML_PAD(hsk, ggml_blck_size(type_K));
+@@ -8453,6 +8458,39 @@ struct test_flash_attn_ext : public test_case {
+                 init_tensor_uniform(t);
+             }
+         }
++
++        if (v_bias != 0.0f) {
++            ggml_tensor * v = ggml_get_tensor(ctx, "v");
++            std::vector<float> data = tensor_to_float(v);
++            std::vector<uint8_t> storage(ggml_nbytes(v));
++            ggml_backend_tensor_get(v, storage.data(), 0, storage.size());
++            const int64_t bs = ggml_blck_size(v->type);
++            const size_t ts = ggml_type_size(v->type);
++            std::vector<float> imatrix(v->ne[0], 1.0f);
++            std::vector<uint8_t> row(ggml_row_size(v->type, v->ne[0]));
++            size_t r = 0;
++            for (int64_t i3 = 0; i3 < v->ne[3]; ++i3) {
++                for (int64_t i2 = 0; i2 < v->ne[2]; ++i2) {
++                    for (int64_t i1 = 0; i1 < v->ne[1]; ++i1, ++r) {
++                        float * values = data.data() + r*v->ne[0];
++                        for (int64_t i0 = 0; i0 < std::min<int64_t>(8, v->ne[0]); ++i0) {
++                            values[i0] += v_bias;
++                        }
++                        ggml_quantize_chunk(v->type, values, row.data(), 0, 1, v->ne[0], imatrix.data());
++                        const size_t offset = i3*v->nb[3] + i2*v->nb[2] + i1*v->nb[1];
++                        // Keep the gaps in KV cache views and permuted tensors intact.
++                        if (v->nb[0] == ts) {
++                            memcpy(storage.data() + offset, row.data(), row.size());
++                        } else {
++                            for (int64_t i0 = 0; i0 < v->ne[0]/bs; ++i0) {
++                                memcpy(storage.data() + offset + i0*v->nb[0], row.data() + i0*ts, ts);
++                            }
++                        }
++                    }
++                }
++            }
++            ggml_backend_tensor_set(v, storage.data(), 0, storage.size());
++        }
+     }
+ 
+     bool grad_precise() override {
+@@ -11551,6 +11589,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+         }
+     }
+ 
++    // Non-zero V means expose output accumulator rounding at long context.
++    for (int hs : {128, 256}) {
++        for (int kv : {16384, 32768}) {
++            for (int nb : {1, 4, 16, 512}) {
++                test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 1, {4, 1}, kv, nb, false, false, 0, 0,
++                    GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 0, 2.0f));
++            }
++        }
++    }
++
+     // prefill-shaped cases with long KV (nb >= 32, kv >= 1024): covers the
+     // XMX/GEMM-accelerated SYCL FA path which only activates for these shapes.
+     for (int kv : { 1024, 2048, }) {
+@@ -11692,6 +11740,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+     // single head with quantized K (MMQ on Vulkan)
+     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 1, { 1, 1}, 8192, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, false, 512));
+     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 1, { 1, 1}, 8192, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_1, GGML_TYPE_Q4_1, {0, 1, 2, 3}, true, false, 512));
++    // Non-power-of-two GQA ratios at small batch sizes: backends may pad the Q heads per tile
++    // to the next power of two and mask the extra heads (including their attention sinks).
++    for (int hs : { 128, 256 }) {
++        for (int gqa : { 3, 5, 6, 7 }) {
++            for (int nb : { 1, 2, 3, 4, 8, 16 }) {
++                for (bool sinks : { false, true }) {
++                    test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 2, {gqa, 1}, 4096, nb, true, sinks, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
++                }
++            }
++            for (int nb : { 3, 8 }) {
++                test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 2, {gqa, 1}, 4096, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
++            }
++        }
++    }
++
+     // KV not a multiple of the compaction workgroup size.
+     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 1, { 8, 1}, 5003, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,  512));
+ 
+@@ -12186,6 +12249,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+     }
+ 
+     // Qwen3-VL-8B https://github.com/ggml-org/llama.cpp/issues/17012
++    // P9 shared P6/P8 perf cases, including power-of-two controls; 4 KV heads like Qwen2.5-7B.
++    for (int hs : {128, 256}) for (int g : {1, 2, 3, 4, 5, 6, 7, 8})
++    for (int kv : {4096, 16384}) for (int nb : {1, 2, 3, 4, 8, 16})
++    for (ggml_type ty : {GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
++        test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 4, {g, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, ty, ty));
++    }
++    // P11 shared 32K decode perf cases; 4 KV heads, masked, F16 and Q8_0.
++    for (int hs : {128, 256}) for (int g : {4})
++    for (int kv : {32768}) for (int nb : {1, 2, 4, 16})
++    for (ggml_type ty : {GGML_TYPE_F16, GGML_TYPE_Q8_0}) {
++        test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 4, {g, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, ty, ty));
++    }
+     test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, 5776, 5776, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+ 
+     // Sparse flash attention (n_kv_max hint) decode across KV depths.

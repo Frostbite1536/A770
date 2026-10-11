@@ -31,7 +31,9 @@ bench/patches/run.sh
 
 3. Inspect the new `bench/results/patches-*/summary.md`, correctness logs and
    per-case `*.fail-*.txt`. Do not proceed past unexplained failures or empty
-   test selections. The CPU-only CPY f16→q4_0 `[256,4,4,4]` flake remains visible;
+   test selections. FA-BIASV failures are expected evidence for upstream/conv8
+   and other reference variants; only fp32f/cap biased-V failures set the exit status.
+   The CPU-only CPY f16→q4_0 `[256,4,4,4]` flake remains visible;
    rerun its exact case on upstream and conv/conv8 before attributing a regression.
    The harness retains failures and exits nonzero; its timing steps still collect evidence.
 4. Stage the four locally supplied models from `bench/models.example.txt`.
@@ -44,7 +46,17 @@ STEPS="build lb" bench/patches/run.sh
 ```
 
 This reuses scratch clones/builds and ccache under `third_party/patches-ab`.
-`lb` interleaves upstream/p6/conv8/Vulkan over two rounds; `perf` defaults to three.
+`lb` interleaves upstream/p6/conv8/fp32f/cap/Vulkan over two rounds; `perf` defaults to three.
+Defaults include `fp32f` (0001–0005 + P-11 F) and `cap` (0001–0005 + P-11 S).
+All variants, including Vulkan, share patch 0005's tests and FP32 CPU reference.
+Correctness reports the 16 `v_bias=2` cases separately as `FA-BIASV`, excluded
+from the main FLASH_ATTN_EXT row even with `TEST_FILTER`.
+The env step records SYCL0's `max_work_group_size`, `max_compute_units` and their
+integer quotient `max_wg_per_cu` in `summary.md`; confirm the A770 geometry before
+interpreting decode results. The `tg` llama-bench tag runs
+`-p 0 -n 32 -d '4096,16384,32768'`; `small` and `kvq8` are unchanged.
+Review [P-11 “Accept if”](design/P11-sycl-fa-fp16-accumulation.md#accept-if-a770-benchpatchesrunsh-manager-defined-2026-10-11-before-any-a770-run)
+before measurement.
 SYCL oneDNN remains at its default ON; preserve selectors/flags when comparing runs.
 Opt-in P-10 experiment: `VARIANTS="upstream p6 conv conv8 grf" STEPS="build perf" bench/patches/run.sh`.
 `grf` is upstream plus the P-10 draft only; it appears only in kernel perf tables.

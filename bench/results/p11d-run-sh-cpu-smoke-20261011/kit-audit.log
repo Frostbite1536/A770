@@ -1,0 +1,11 @@
+P9 perf block byte-identical: PASS
+P11 acceptance quote verbatim: PASS
+Initial fresh-WORK and final rerun source diffs identical for all three variants: PASS
+p11d-run-sh-cpu-smoke-20261011/upstream: 4 clean main cases, 16 unique biased cases, bias FAIL=0; launch nsm=8 max_wg_per_cu=1024: PASS
+p11d-run-sh-cpu-smoke-20261011/fp32f: 4 clean main cases, 16 unique biased cases, bias FAIL=0; launch nsm=8 max_wg_per_cu=1024: PASS
+p11d-run-sh-cpu-smoke-20261011/cap: 4 clean main cases, 16 unique biased cases, bias FAIL=0; launch nsm=8 max_wg_per_cu=1024: PASS
+p11d-run-sh-cpu-smoke-20261011: correctness table matches raw cases; harness exit=0: PASS
+forced-geometry/upstream: 4 clean main cases, 16 unique biased cases, bias FAIL=4; launch nsm=32 max_wg_per_cu=2: PASS
+forced-geometry/cap: 4 clean main cases, 16 unique biased cases, bias FAIL=0; launch nsm=32 max_wg_per_cu=2: PASS
+forced-geometry: correctness table matches raw cases; harness exit=0: PASS
+Forced upstream process rc=1 retained; CPU env-only geometry printed: PASS

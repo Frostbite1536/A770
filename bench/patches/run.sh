@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # A770 patch-series A/B on bench/LLAMA_COMMIT; no network or source-worktree writes.
-# Default: upstream, p6 (0001-2), conv (0001-3), conv8 (0001-4), Vulkan reference.
+# Default: upstream, p6 (0001-2), conv (0001-3), conv8 (0001-4),
+# fp32f/cap (0001-5 + P-11 F/S), plus Vulkan reference for perf/lb.
 # Opt in to P-10 with VARIANTS="upstream p6 conv conv8 grf"; grf is upstream +
 # p10-draft only, and participates in perf only (no correctness or llama-bench).
 # STEPS="env micro build test perf lb"; MODELS is a whitespace-separated GGUF list.
@@ -18,7 +19,7 @@ ROOT=$PWD
 LLAMA_SRC=${LLAMA_SRC:-$ROOT/third_party/llama.cpp}
 WORK=${WORK:-$ROOT/third_party/patches-ab}
 OUT=${OUT:-$ROOT/bench/results/patches-$(date +%Y%m%d-%H%M%S)-$$}
-VARIANTS=${VARIANTS:-"upstream p6 conv conv8"}
+VARIANTS=${VARIANTS:-"upstream p6 conv conv8 fp32f cap"}
 STEPS=${STEPS:-"env micro build test perf lb"}
 ROUNDS=${ROUNDS:-3}
 LB_ROUNDS=${LB_ROUNDS:-2}
@@ -61,7 +62,7 @@ base=$(cat "$ROOT/bench/LLAMA_COMMIT")
 patches_for() {
     local n=0 k files
     case $1 in
-        upstream|vulkan) ;; p6) n=2 ;; conv) n=3 ;; conv8) n=4 ;;
+        upstream|vulkan) ;; p6) n=2 ;; conv) n=3 ;; conv8) n=4 ;; fp32f|cap) n=5 ;;
         grf) echo "$PATCHES/p10-draft-SYCL-FA-TILE-grf-size-automatic.patch"; return ;;
         *) die "unknown variant: $1" ;;
     esac
@@ -70,6 +71,13 @@ patches_for() {
         [[ ${#files[@]} == 1 && -f ${files[0]} ]] || die "missing/ambiguous patch $k"
         printf '%s\n' "${files[0]}"
     done
+    case $1 in
+        fp32f) files=("$PATCHES"/p11c/F-*.patch) ;;
+        cap) files=("$PATCHES"/p11c/S-*.patch) ;;
+        *) return ;;
+    esac
+    [[ ${#files[@]} == 1 && -f ${files[0]} ]] || die "missing/ambiguous P-11 patch: $1"
+    printf '%s\n' "${files[0]}"
 }
 [[ ${#variants[@]} -gt 0 ]] || die "VARIANTS is empty"
 declare -A seen=()
@@ -77,12 +85,15 @@ for v in "${variants[@]}"; do
     [[ $v != vulkan ]] || die "Vulkan is added automatically for perf/lb"
     [[ ! ${seen[$v]+yes} ]] || die "duplicate variant: $v"
     seen[$v]=1
-    while IFS= read -r p; do [[ -f $p ]] || die "missing $p"; done < <(patches_for "$v")
-    case $v in upstream|p6|conv|conv8|grf) ;; *) die "unknown variant: $v" ;; esac
+    recipe=$(patches_for "$v") || die "invalid patch recipe: $v"
+    if [[ -n $recipe ]]; then
+        while IFS= read -r p; do [[ -f $p ]] || die "missing $p"; done <<< "$recipe"
+    fi
+    case $v in upstream|p6|conv|conv8|fp32f|cap|grf) ;; *) die "unknown variant: $v" ;; esac
 done
 if has lb && (( ${#models[@]} )); then
     for m in "${models[@]}"; do [[ -f $m ]] || die "missing model: $m"; done
-    for v in upstream p6 conv8; do
+    for v in upstream p6 conv8 fp32f cap; do
         if [[ ! ${seen[$v]+yes} ]]; then variants+=("$v"); seen[$v]=1; fi
     done
 fi
@@ -106,7 +117,7 @@ fi
     printf 'BUILD_FLAGS_EXTRA=%s\nTEST_FILTER=%s\n' "${BUILD_FLAGS_EXTRA:-}" "${TEST_FILTER:-}"
     printf 'ROUNDS=%s\nLB_ROUNDS=%s\nREPS=%s\nJOBS=%s\n' "$ROUNDS" "$LB_ROUNDS" "$REPS" "$JOBS"
     printf '%s\n%s\n' "$devices" "$ver"
-    sha256sum "$PATCHES"/*.patch
+    sha256sum "$PATCHES"/*.patch "$PATCHES"/p11c/*.patch
     [[ $CPU_SMOKE == 0 ]] || sha256sum "$PATCHES"/test-only/*.patch
 } > "$OUT/manifest.txt"
 python3 - > "$OUT/env-vars.txt" <<'PY'
@@ -118,14 +129,63 @@ for k in sorted(os.environ):
         print(f"{k}={os.environ[k]}")
 PY
 if has env; then
-    # phase0 hardcodes OUT: import its capture rather than duplicate its probes.
+    # Redirect the unmodified phase0 probes through a scratch copy: all captures
+    # stay inside this run's OUT rather than creating a second results tree.
     log "env via phase0"
-    STEPS=env LLAMA="$LLAMA_SRC" BACKENDS="sycl vulkan" TAG="patches-$$" \
-        bash "$ROOT/bench/phase0.sh" > "$OUT/phase0.log" 2>&1
-    phase_out=$(sed -n 's/^.*done: //p' "$OUT/phase0.log" | tail -1)
-    [[ -f $phase_out/env.txt ]] || die "phase0 env capture missing; see phase0.log"
-    cp "$phase_out/env.txt" "$OUT/env.txt"
-    printf 'phase0 capture imported from %s\n' "$phase_out" >> "$OUT/manifest.txt"
+    python3 - "$ROOT/bench/phase0.sh" "$WORK/phase0-env.sh" <<'PY'
+import pathlib, sys
+source, dest = map(pathlib.Path, sys.argv[1:])
+s = source.read_text().replace('cd "$(dirname "$0")/.."', 'cd "$PHASE0_ROOT"', 1)
+s = s.replace(next(line for line in s.splitlines() if line.startswith("OUT=")),
+              'OUT=${PHASE0_OUT:?}', 1)
+dest.write_text(s)
+PY
+    PHASE0_ROOT="$ROOT" PHASE0_OUT="$OUT/phase0" STEPS=env LLAMA="$LLAMA_SRC" \
+        BACKENDS="sycl vulkan" TAG="patches-$$" bash "$WORK/phase0-env.sh" > "$OUT/phase0.log" 2>&1
+    cp "$OUT/phase0/env.txt" "$OUT/env.txt"
+    sycl-ls --verbose > "$OUT/sycl-ls-verbose.txt" 2>&1
+    # Prefer verbose fields only when they belong to the default device, which
+    # dpct::dev_mgr places at SYCL0; a device-list entry alone is ambiguous.
+    if ! python3 - "$OUT/sycl-ls-verbose.txt" > "$OUT/geometry.txt" <<'PY'
+import pathlib, re, sys
+s = pathlib.Path(sys.argv[1]).read_text()
+default = re.search(r"^default_selector\(\)\s*:\s*([^\n]+)", s, re.M)
+blocks = re.split(r"(?=^        Type\s*:)", s, flags=re.M)[1:]
+for block in blocks:
+    name = re.search(r"^        Name\s*:\s*(.+)", block, re.M)
+    wg = re.search(r"(?:max_work_group_size|Max Work Group Size)\s*:\s*(\d+)", block, re.I)
+    cu = re.search(r"(?:max_compute_units|Max Compute Units)\s*:\s*(\d+)", block, re.I)
+    if default and name and name[1] in default[1] and wg and cu and int(cu[1]):
+        print(f"SYCL0 device: {name[1]}")
+        print(f"SYCL0 max_work_group_size={wg[1]}")
+        print(f"SYCL0 max_compute_units={cu[1]}")
+        print(f"SYCL0 max_wg_per_cu={int(wg[1]) // int(cu[1])}")
+        break
+else:
+    sys.exit(1)
+PY
+    then
+        cat > "$WORK/launch-geometry.cpp" <<'CPP'
+#include <sycl/sycl.hpp>
+#include <iostream>
+int main() {
+    const sycl::device d(sycl::default_selector_v); // dpct SYCL0
+    const auto wg = d.get_info<sycl::info::device::max_work_group_size>();
+    const auto cu = d.get_info<sycl::info::device::max_compute_units>();
+    if (!cu) return 1;
+    std::cout << "SYCL0 device: " << d.get_info<sycl::info::device::name>()
+              << "\nSYCL0 max_work_group_size=" << wg
+              << "\nSYCL0 max_compute_units=" << cu
+              << "\nSYCL0 max_wg_per_cu=" << wg / cu << "\n";
+}
+CPP
+        icpx -std=c++17 -fsycl "$WORK/launch-geometry.cpp" -o "$WORK/launch-geometry" > "$OUT/geometry.build.log" 2>&1
+        "$WORK/launch-geometry" > "$OUT/geometry.txt" 2> "$OUT/geometry.err"
+    fi
+    cat "$OUT/geometry.txt" | tee -a "$OUT/env.txt" "$OUT/run.log"
+    # Physical quotient above is separate from test-only CPU launch overrides.
+    printf 'GGML_SYCL_TEST_NSM=%s\nGGML_SYCL_TEST_MAX_WG_PER_CU=%s\n' \
+        "${GGML_SYCL_TEST_NSM:-unset}" "${GGML_SYCL_TEST_MAX_WG_PER_CU:-unset}" >> "$OUT/geometry.txt"
 fi
 if has micro; then
     log "dequant microbenchmark (bit-exact required)"
@@ -136,11 +196,17 @@ if has micro; then
 fi
 
 prepare() {
-    local v=$1 src=$WORK/$1 p signature
+    local v=$1 src=$WORK/$1 p signature recipe
     local -a ps=()
-    mapfile -t ps < <(patches_for "$v")
+    recipe=$(patches_for "$v") || die "invalid patch recipe: $v"
+    if [[ -n $recipe ]]; then mapfile -t ps <<< "$recipe"; fi
+    # Shared patch 0005 changes only tests and the CPU reference under use_ref.
+    # Include it for upstream/Vulkan too, unless already in the variant recipe.
+    local -a shared=("$PATCHES"/0005-*.patch)
+    [[ ${#shared[@]} == 1 && -f ${shared[0]} ]] || die "missing/ambiguous patch 5"
+    if [[ " ${ps[*]} " != *" ${shared[0]} "* ]]; then ps+=("${shared[0]}"); fi
     if [[ $CPU_SMOKE == 1 ]]; then ps+=("$PATCHES"/test-only/*.patch); fi
-    signature=$({ printf '%s\n' "$base" "$v" "$CPU_SMOKE" 'shared-cases-v2';
+    signature=$({ printf '%s\n' "$base" "$v" "$CPU_SMOKE" 'shared-cases-v3';
         if (( ${#ps[@]} )); then sha256sum "${ps[@]}"; fi; } | sha256sum | cut -d ' ' -f1)
     if [[ -e $src ]]; then
         [[ ! -L $src && -f $src/.ab-signature && $(cat "$src/.ab-signature") == "$signature" ]] || die "scratch recipe changed/incomplete at $src; choose a fresh WORK"
@@ -174,6 +240,13 @@ block = """    // P9 shared P6/P8 perf cases, including power-of-two controls; 4
         test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 4, {g, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, ty, ty));
     }
 """
+block += """    // P11 shared 32K decode perf cases; 4 KV heads, masked, F16 and Q8_0.
+    for (int hs : {128, 256}) for (int g : {4})
+    for (int kv : {32768}) for (int nb : {1, 2, 4, 16})
+    for (ggml_type ty : {GGML_TYPE_F16, GGML_TYPE_Q8_0}) {
+        test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 4, {g, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, ty, ty));
+    }
+"""
 s = s.replace(anchor, block + anchor)
 t.write_text(s)
 PY
@@ -186,28 +259,51 @@ correctness() {
     if [[ $op == FLASH_ATTN_EXT && -n ${TEST_FILTER:-} ]]; then filter=(-p "$TEST_FILTER"); fi
     log "correctness $v $op"
     "$tbo" test -b SYCL0 -o "$op" "${filter[@]}" > "$OUT/$v.test-$op.txt" 2>&1 || rc=$?
-    counts=$(python3 - "$OUT/$v.test-$op.txt" "$OUT/$v.fail-$op.txt" "$v" "$op" "$rc" "$OUT/correctness.md" <<'PY'
+    # Run FA once with TEST_FILTER, then classify by case name. Biased-V cases
+    # never enter the main FA row, even with a custom filter or a failing run.
+    counts=$(python3 - "$OUT/$v.test-$op.txt" "$OUT" "$v" "$op" "$rc" <<'PY'
 import pathlib, re, sys
-path, failures, variant, op, rc, table = sys.argv[1:]
+path, out, variant, op, process_rc = sys.argv[1:]
 s = re.sub(r"\x1b\[[0-9;]*m", "", pathlib.Path(path).read_text(errors="replace"))
+# Diagnostics can precede the case on its line; failing-test lists lack ": ".
+records = re.findall(rf"^.*?  {op}\([^\n]+\): [^\n]*$", s, re.M)
+groups = {op: []}
+if op == "FLASH_ATTN_EXT":
+    groups["FA-BIASV"] = []
+for record in records:
+    label = "FA-BIASV" if op == "FLASH_ATTN_EXT" and re.search(r",v_bias=2(?:[,.\)])", record.splitlines()[0]) else op
+    groups[label].append(record)
 summary = re.findall(r"^  (\d+)/(\d+) tests passed$", s, re.M)
-passed, total = map(int, summary[-1]) if summary else (0, 0)
-unsupported = sum("not supported" in line and line.startswith(f"  {op}(") for line in s.splitlines())
-failed = total - passed
-details = s.split("Failing tests:\n", 1)[-1] if "Failing tests:\n" in s else "\n".join(
-    line for line in s.splitlines() if "FAIL" in line or "Error" in line)
-pathlib.Path(failures).write_text(details + "\n")
-with open(table, "a") as f:
-    f.write(f"| {variant} | {op} | {rc} | {passed} | {failed} | {unsupported} |\n")
-print(f"rc={rc} PASS={passed} FAIL={failed} UNSUPPORTED={unsupported} executed={total}")
+parsed_pass = sum(bool(re.search(r"\bOK\s*$", r, re.M)) for r in records)
+parsed_fail = sum(bool(re.search(r"\bFAIL\s*$", r, re.M)) for r in records)
+incomplete = (not summary or parsed_pass + parsed_fail == 0 or tuple(map(int, summary[-1])) != (parsed_pass, parsed_pass + parsed_fail)
+              or int(process_rc) not in (0, 1) or (int(process_rc) != 0 and parsed_fail == 0))
+for label, rows in groups.items():
+    passed = sum(bool(re.search(r"\bOK\s*$", r, re.M)) for r in rows)
+    failed = sum(bool(re.search(r"\bFAIL\s*$", r, re.M)) for r in rows)
+    unsupported = sum("not supported" in r for r in rows)
+    # An intentionally empty slice is visible but does not fail a filtered run.
+    # Missing/unparseable summaries and crashes remain fatal in the main row.
+    invalid = incomplete if label == op else bool(rows and passed + failed == 0)
+    row_rc = int(bool(failed or invalid))
+    details = "".join(r + "\n" for r in rows if re.search(r"\bFAIL\s*$", r, re.M))
+    if invalid:
+        details += f"Incomplete/unparseable selection: process rc={process_rc}; see {path}\n"
+    pathlib.Path(out, f"{variant}.fail-{label}.txt").write_text(details)
+    with open(pathlib.Path(out, "correctness.md"), "a") as f:
+        f.write(f"| {variant} | {label} | {row_rc} | {passed} | {failed} | {unsupported} |\n")
+    print(f"{label} {row_rc} PASS={passed} FAIL={failed} UNSUPPORTED={unsupported} executed={passed + failed}")
 PY
 )
-    log "  $v $op $counts"
-    if [[ $rc != 0 || $counts != *'FAIL=0 '* || $counts == *'executed=0' ]]; then
-        failed=1
-        log "  failures/incomplete execution: $OUT/$v.fail-$op.txt (full log: $v.test-$op.txt)"
-        cat "$OUT/$v.fail-$op.txt" | tee -a "$OUT/run.log"
-    fi
+    local label row_rc detail
+    while read -r label row_rc detail; do
+        log "  $v $label rc=$row_rc $detail (process rc=$rc)"
+        if [[ $row_rc != 0 ]]; then
+            if [[ $label != FA-BIASV || $v == fp32f || $v == cap ]]; then failed=1; fi
+            log "  failures/incomplete execution: $OUT/$v.fail-$label.txt (full log: $v.test-$op.txt)"
+            cat "$OUT/$v.fail-$label.txt" | tee -a "$OUT/run.log"
+        fi
+    done <<< "$counts"
 }
 for v in "${variants[@]}"; do
     prepare "$v"
@@ -265,7 +361,7 @@ else:
 PY
 }
 device() { if [[ $1 == vulkan ]]; then echo Vulkan0; else echo SYCL0; fi; }
-PERF_FILTER=${PERF_FILTER:-'hsk=(128|256),hsv=(128|256),nh=4,nr23=\[[1-8],1\],kv=(4096|16384),nb=(1|2|3|4|8|16),mask=1,sinks=0,'}
+PERF_FILTER=${PERF_FILTER:-'hsk=(128|256),hsv=(128|256),nh=4,nr23=\[[1-8],1\],kv=(4096|16384|32768),nb=(1|2|3|4|8|16),mask=1,sinks=0,'}
 if has perf; then
     for ((i=1; i<=ROUNDS; i++)); do
         for v in "${variants[@]}"; do
@@ -282,11 +378,12 @@ if has lb; then
     for m in "${models[@]}"; do
         model_id=$((model_id+1))
         printf 'model %s=%s\n' "$model_id" "$m" >> "$OUT/manifest.txt"
-        for tag in small kvq8; do
+        for tag in small kvq8 tg; do
             if [[ $tag == small ]]; then args=(-p '1,2,4,8,16' -n 0 -d '4096,16384')
-            else args=(-ctk q8_0 -ctv q8_0 -p '4,8' -n 32 -d 16384); fi
+            elif [[ $tag == kvq8 ]]; then args=(-ctk q8_0 -ctv q8_0 -p '4,8' -n 32 -d 16384)
+            else args=(-p 0 -n 32 -d '4096,16384,32768'); fi
             for ((i=1; i<=LB_ROUNDS; i++)); do
-                for v in upstream p6 conv8 vulkan; do
+                for v in upstream p6 conv8 fp32f cap vulkan; do
                     gpu_state "$OUT/$v.m$model_id.$tag.r$i.gpu.txt"
                     log "llama-bench model $model_id $tag $v round $i; GPU state: $v.m$model_id.$tag.r$i.gpu.txt"
                     "$WORK/$v/build/bin/llama-bench" -m "$m" -dev "$(device "$v")" -ngl 99 -fa on -r "$REPS" -o jsonl "${args[@]}" \
@@ -342,8 +439,14 @@ PY
     fi
     echo 'Read manifest.txt, env.txt (if requested), env-vars.txt and round GPU samples with these results.'
     echo 'INV-PERF-002: use the faster upstream SYCL/Vulkan result for each shape; missing/unsupported rows have no established baseline.'
+    echo; echo '## SYCL0 launch geometry'; echo
+    if [[ -f $OUT/geometry.txt ]]; then
+        echo '```text'; cat "$OUT/geometry.txt"; echo '```'
+    else echo 'not run'; fi
+    echo 'max_wg_per_cu is the integer quotient max_work_group_size / max_compute_units used by launch_fattn; CPU test overrides are recorded separately.'
     echo; echo '## Correctness'; echo
     if has test; then cat "$OUT/correctness.md"; else echo 'not run'; fi
+    echo 'FA-BIASV failures are expected evidence for other variants; only fp32f/cap failures affect the exit status (P-11 Accept if 2).'
     echo; echo 'Per-case failures: *.fail-*.txt; full output: *.test-*.txt. Known upstream CPU flake:'
     # shellcheck disable=SC2016 # Markdown code span, deliberately literal.
     echo '`CPY(type_src=f16,type_dst=q4_0,ne_src=[256,4,4,4],...)`; counted, never suppressed.'
@@ -364,11 +467,11 @@ PY
         echo; echo '## llama-bench'; echo; echo 'not run'
     else
         for ((model_id=1; model_id<=${#models[@]}; model_id++)); do
-            for tag in small kvq8; do
+            for tag in small kvq8 tg; do
                 echo; echo "## llama-bench model $model_id $tag"; echo
-                analyze lb "m$model_id.$tag" "$LB_ROUNDS" upstream p6 conv8 vulkan
+                analyze lb "m$model_id.$tag" "$LB_ROUNDS" upstream p6 conv8 fp32f cap vulkan
                 echo; echo '### Relative to upstream Vulkan'; echo
-                analyze lb "m$model_id.$tag" "$LB_ROUNDS" vulkan upstream p6 conv8
+                analyze lb "m$model_id.$tag" "$LB_ROUNDS" vulkan upstream p6 conv8 fp32f cap
             done
         done
     fi

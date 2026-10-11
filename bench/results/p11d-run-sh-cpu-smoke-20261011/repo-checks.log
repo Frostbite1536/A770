@@ -1,0 +1,83 @@
+-- The CXX compiler identification is GNU 13.3.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- A770: no icpx, building CPU reference and tests only
+-- Found Python3: /home/p51/Github/A770/.venv/bin/python3.12 (found version "3.12.3") found components: Interpreter
+-- Configuring done (2.5s)
+-- Generating done (0.0s)
+-- Build files have been written to: /tmp/a770-p11d-repo-build
+[1/11] Building CXX object src/reference/CMakeFiles/a770_ref.dir/attention_reference.cpp.o
+[2/11] Building CXX object src/reference/CMakeFiles/a770_ref.dir/attention_tiled_model.cpp.o
+[3/11] Linking CXX static library src/reference/liba770_ref.a
+[4/11] Building CXX object tests/CMakeFiles/test_fp16.dir/test_fp16.cpp.o
+[5/11] Building CXX object tests/CMakeFiles/test_reference.dir/test_reference.cpp.o
+[6/11] Building CXX object tests/CMakeFiles/test_tiled_model.dir/test_tiled_model.cpp.o
+[7/11] Linking CXX executable tests/test_fp16
+[8/11] Building CXX object tests/CMakeFiles/error_budget.dir/error_budget.cpp.o
+[9/11] Linking CXX executable tests/test_reference
+[10/11] Linking CXX executable tests/test_tiled_model
+[11/11] Linking CXX executable tests/error_budget
+Test project /tmp/a770-p11d-repo-build
+      Start  1: fp16
+ 1/28 Test  #1: fp16 .............................   Passed    0.02 sec
+      Start  2: reference_tiny
+ 2/28 Test  #2: reference_tiny ...................   Passed    0.01 sec
+      Start  3: reference_uniform
+ 3/28 Test  #3: reference_uniform ................   Passed    0.01 sec
+      Start  4: reference_double
+ 4/28 Test  #4: reference_double .................   Passed    0.01 sec
+      Start  5: reference_gqa
+ 5/28 Test  #5: reference_gqa ....................   Passed    0.01 sec
+      Start  6: reference_causal
+ 6/28 Test  #6: reference_causal .................   Passed    0.01 sec
+      Start  7: reference_masked
+ 7/28 Test  #7: reference_masked .................   Passed    0.01 sec
+      Start  8: reference_softcap
+ 8/28 Test  #8: reference_softcap ................   Passed    0.01 sec
+      Start  9: reference_large
+ 9/28 Test  #9: reference_large ..................   Passed    0.01 sec
+      Start 10: reference_validation
+10/28 Test #10: reference_validation .............   Passed    0.01 sec
+      Start 11: tiled_matrix
+11/28 Test #11: tiled_matrix .....................   Passed   20.14 sec
+      Start 12: tiled_masked
+12/28 Test #12: tiled_masked .....................   Passed    0.00 sec
+      Start 13: tiled_rounding
+13/28 Test #13: tiled_rounding ...................   Passed    0.00 sec
+      Start 14: tiled_validation
+14/28 Test #14: tiled_validation .................   Passed    0.00 sec
+      Start 15: error_budget
+15/28 Test #15: error_budget .....................   Passed   31.84 sec
+      Start 16: plan_tiles_smoke
+16/28 Test #16: plan_tiles_smoke .................   Passed    0.06 sec
+      Start 17: decode_gqa_model_smoke
+17/28 Test #17: decode_gqa_model_smoke ...........   Passed    0.11 sec
+      Start 18: analyze_tbo
+18/28 Test #18: analyze_tbo ......................   Passed    0.16 sec
+      Start 19: analyze_lb_rounds
+19/28 Test #19: analyze_lb_rounds ................   Passed    0.11 sec
+      Start 20: xe_report_dpas_simd8
+20/28 Test #20: xe_report_dpas_simd8 .............   Passed    1.11 sec
+      Start 21: xe_report_large_grf
+21/28 Test #21: xe_report_large_grf ..............   Passed    0.70 sec
+      Start 22: xe_report_dpas_simd16_silent
+22/28 Test #22: xe_report_dpas_simd16_silent .....   Passed    0.78 sec
+      Start 23: xe_report_spill
+23/28 Test #23: xe_report_spill ..................   Passed    2.78 sec
+      Start 24: xe_report_fp64
+24/28 Test #24: xe_report_fp64 ...................   Passed    0.88 sec
+      Start 25: xe_report_block2d
+25/28 Test #25: xe_report_block2d ................   Passed    0.61 sec
+      Start 26: xe_report_slm
+26/28 Test #26: xe_report_slm ....................   Passed    1.68 sec
+      Start 27: xe_report_sycl_joint_matrix
+27/28 Test #27: xe_report_sycl_joint_matrix ......   Passed    9.22 sec
+      Start 28: xe_report_compile_commands
+28/28 Test #28: xe_report_compile_commands .......   Passed   18.88 sec
+
+100% tests passed out of 28
+
+Total Test time (real) =  89.17 sec

@@ -1,0 +1,21 @@
+[05:20:25] ccache unavailable; compiling without cache (no installation)
+[05:20:25] env via phase0
+SYCL0 device: Intel(R) Xeon(R) CPU E3-1505M v6 @ 3.00GHz
+SYCL0 max_work_group_size=8192
+SYCL0 max_compute_units=8
+SYCL0 max_wg_per_cu=1024
+[05:20:31] build upstream
+[05:31:32] correctness upstream FLASH_ATTN_EXT
+[05:38:41]   upstream FLASH_ATTN_EXT rc=0 PASS=4 FAIL=0 UNSUPPORTED=0 executed=4 (FA process rc=0)
+[05:38:41]   upstream FA-BIASV rc=0 PASS=16 FAIL=0 UNSUPPORTED=0 executed=16 (FA process rc=0)
+[05:38:42] build fp32f
+[05:49:29] correctness fp32f FLASH_ATTN_EXT
+[06:01:02]   fp32f FLASH_ATTN_EXT rc=0 PASS=4 FAIL=0 UNSUPPORTED=0 executed=4 (FA process rc=0)
+[06:01:02]   fp32f FA-BIASV rc=0 PASS=16 FAIL=0 UNSUPPORTED=0 executed=16 (FA process rc=0)
+[06:01:03] build cap
+[06:11:49] correctness cap FLASH_ATTN_EXT
+[06:19:53]   cap FLASH_ATTN_EXT rc=0 PASS=4 FAIL=0 UNSUPPORTED=0 executed=4 (FA process rc=0)
+[06:19:53]   cap FA-BIASV rc=0 PASS=16 FAIL=0 UNSUPPORTED=0 executed=16 (FA process rc=0)
+[06:19:53] correctness cap FLASH_ATTN_EXT
+[06:20:23]   cap FLASH_ATTN_EXT rc=0 PASS=4 FAIL=0 UNSUPPORTED=0 executed=4 (FA process rc=0)
+[06:20:23]   cap FA-BIASV rc=0 PASS=16 FAIL=0 UNSUPPORTED=0 executed=16 (FA process rc=0)

@@ -1,0 +1,1 @@
+second smoke exit code=0

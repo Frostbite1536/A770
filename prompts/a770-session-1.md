@@ -10,7 +10,8 @@ criteria and report findings. Do not decide whether to ship.
 Read first: CLAUDE.md, REVIEW.md, docs/INVARIANTS.md, docs/TOOLCHAIN.md (A770 box),
 docs/A770_BOX.md (§0 command order), bench/phase0.sh, bench/patches/run.sh,
 bench/models.example.txt, docs/design/P6-sycl-padded-gqa.md,
-docs/design/P8-sycl-kv-conversion.md and prompts/a770-session-1.md (this file).
+docs/design/P8-sycl-kv-conversion.md, docs/design/P11-sycl-fa-fp16-accumulation.md
+and prompts/a770-session-1.md (this file).
 Also read the pinned llama.cpp docs/backend/SYCL.md for selectors and watchdogs.
 Then give a short plan and follow the checklist and rules below.
 ```
@@ -24,10 +25,14 @@ Then give a short plan and follow the checklist and rules below.
 2. Run repo build/ctest, then Phase 0 env/build/support/test/perf for SYCL and
    Vulkan, in the exact command order in the runbook. Save the ctest summary.
 3. Run `bench/patches/run.sh` without models: phase0 env capture, bit-exact
-   conversion microbenchmark, cumulative upstream/p6/conv/conv8 builds,
-   FLASH_ATTN_EXT correctness plus CPY/GET_ROWS for conv/conv8, three interleaved
-   kernel rounds and Vulkan reference. Inspect `run.log` during long builds;
-   after a timeout rerun incremental builds, never kill an unrelated process.
+   conversion microbenchmark, upstream/p6/conv/conv8/fp32f/cap builds,
+   FLASH_ATTN_EXT correctness plus CPY/GET_ROWS for conv/conv8, and a separate
+   FA-BIASV row for the 16 biased-V cases (excluded from the main FA counts).
+   Only fp32f/cap biased-V failures affect exit status; other variants' failures
+   are expected evidence under P-11 criterion 2. Record SYCL0 max_work_group_size,
+   max_compute_units and max_wg_per_cu from the env step in summary.md.
+   Run three interleaved kernel rounds and Vulkan reference. Inspect `run.log`
+   during long builds; after a timeout rerun incremental builds, never kill an unrelated process.
    Inspect counts, unsupported cases, failures and GPU samples before interpreting
    tables. Archive and copy this first result home immediately.
 4. Run `STEPS="build lb" MODELS="..." bench/patches/run.sh` with the four paths
@@ -36,7 +41,8 @@ Then give a short plan and follow the checklist and rules below.
    Qwen2.5-14B Q4_K_M (GQA 5), gemma-2-9b Q6_K (D=256, GQA 2, softcap).
    Record model/runtime failures, including VRAM limits, without removing rows.
    Small-batch: pp1/2/4/8/16 at 4K/16K; quantised-KV: q8_0 pp4/8 + tg32 at 16K.
-   Compare upstream/p6/conv8/Vulkan over two interleaved rounds.
+   Decode tag `tg`: `-p 0 -n 32 -d '4096,16384,32768'` (F16 KV).
+   Compare upstream/p6/conv8/fp32f/cap/Vulkan over two interleaved rounds.
 5. Cross-check upstream vs p6 with `bin/llama-sycl-fa-static.sh` on the scratch
    clones (runbook commands). Separate static resource reports from runtime.
    Optional P-10: select `grf` in VARIANTS for `STEPS="build perf"`; compare the
@@ -68,6 +74,15 @@ Report those changes with criterion 2; do not silently reinterpret criterion 4.
 From `docs/design/P8-sycl-kv-conversion.md`, “Accept if” (manager-defined
 2026-10-10, before any A770 run). Quote that section verbatim to the owner and
 confirm it before measuring; the owner may revise it then, never after a run.
+
+From `docs/design/P11-sycl-fa-fp16-accumulation.md`, “Accept if (A770, `bench/patches/run.sh`; manager-defined 2026-10-11, before any A770 run)”:
+
+> 1. **Geometry**: record the A770's `max_work_group_size` and `max_compute_units` (env step). If `max_wg_per_cu` is not 2, recompute keys per accumulator for the decode shapes before reading 2–4.
+> 2. **Correctness**: `fp32f` and `cap` pass the 16 biased-V cases on the A770 and show no new FLASH_ATTN_EXT failures vs `conv8`. `upstream`/`conv8` biased-V results are recorded as evidence (failures expected at ≥ 4096 keys per accumulator), not counted as regressions.
+> 3. **Kernel**: at the decode shapes (nb 1–4, G 4, kv 4096/16384/32768, F16 and q8_0), the candidate's median over ≥ 3 interleaved rounds is no more than 3% slower than `conv8`.
+> 4. **End to end**: Llama-3.1-8B tg32 at depth 16384 and 32768 is no more than 3% slower than `conv8`, and `-p 1..16` at depth 4096/16384 likewise.
+>
+> Choice: take F if it meets 2–4. Otherwise take S if it meets 2–4. Otherwise ship neither and report the costs. A candidate that is faster than `conv8` is fine. Thresholds are fixed before measurement; the owner may revise them before the session, not after.
 
 Background only, quoted from volta-fa `docs/design/P8-quantised-kv-decode.md`
 “Accept if” (different architecture, variants and workload; not A770 acceptance):

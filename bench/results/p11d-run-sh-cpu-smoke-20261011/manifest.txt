@@ -1,0 +1,29 @@
+base=79e2e74eb11022c1ba2e438df7f0ca2d4c10f8b6
+variants=upstream fp32f cap
+STEPS=env build test
+CPU_SMOKE=1
+FORCE=1
+BUILD_FLAGS_EXTRA=-DGGML_SYCL_DEVICE_ARCH= -DGGML_SYCL_DNN=OFF -DGGML_SYCL_SUPPORT_LEVEL_ZERO_API=OFF
+TEST_FILTER=v_bias=2|hsk=128,hsv=128,nh=2,nr23=\[7,1\],kv=4096,nb=(1|2|3|4),mask=1,sinks=0,.*type_K=f16,type_V=f16
+ROUNDS=3
+LB_ROUNDS=2
+REPS=3
+JOBS=8
+INFO: Output filtered by ONEAPI_DEVICE_SELECTOR environment variable, which is set to opencl:cpu.
+To see device ids, use the --ignore-device-selectors CLI option.
+
+[opencl:cpu] Intel(R) OpenCL, Intel(R) Xeon(R) CPU E3-1505M v6 @ 3.00GHz OpenCL 3.0 (Build 0) [2026.21.7.0.24_160000]
+Intel(R) oneAPI DPC++/C++ Compiler 2026.1.1 (2026.1.1.20260724)
+Target: x86_64-unknown-linux-gnu
+Thread model: posix
+InstalledDir: /home/p51/Github/A770/tools/oneapi-2026.1/bin/compiler
+Configuration file: /home/p51/Github/A770/tools/oneapi-2026.1/bin/compiler/../icpx.cfg
+a1902765b3090d99aa7b19913e4003280c10749f745b3bf8dab46a0e51b7d6c7  /home/p51/Github/A770/.worktrees/p11d-run-sh-p11-variants/third_party/patches/0001-SYCL-FA-TILE-phantom-heads-and-padded-GQA.patch
+6c5a3f5c665f761a0d4820d2944d8e157d2b899a613cb257c15d6488ea07e225  /home/p51/Github/A770/.worktrees/p11d-run-sh-p11-variants/third_party/patches/0002-tests-FA-non-power-of-two-GQA-small-batch.patch
+4e108fdcafa53443eab534e227a2f9f2f9e6482a4b6f191ba01df2bbedb5e15d  /home/p51/Github/A770/.worktrees/p11d-run-sh-p11-variants/third_party/patches/0003-SYCL-fewer-idle-work-items-converting-short-non-contiguous-rows.patch
+42cbc0a97b4eb5ec4b0162d74d69b607995f85dbf8c83c8e7eb8e0324a8fd918  /home/p51/Github/A770/.worktrees/p11d-run-sh-p11-variants/third_party/patches/0004-SYCL-vectorized-dequantization-of-non-contiguous-q4_0-q8_0.patch
+8e9167b6d3e1cbc08756174ad06267f4d48d3d742d8bdef0bc395691bbc67b1d  /home/p51/Github/A770/.worktrees/p11d-run-sh-p11-variants/third_party/patches/0005-tests-biased-V-FA-cases-with-FP32-CPU-reference.patch
+97d5d6238b8d55d88a119c3cb08f2d3ac7b6f51ca31dd67669f0ae989378c8e2  /home/p51/Github/A770/.worktrees/p11d-run-sh-p11-variants/third_party/patches/p10-draft-SYCL-FA-TILE-grf-size-automatic.patch
+ed4b6dd0e0d0e8539068d7de716f5b9ccc27c900e8bef5cef567ae8bc6e8d9c0  /home/p51/Github/A770/.worktrees/p11d-run-sh-p11-variants/third_party/patches/p11c/F-SYCL-FA-tile-flush-FP16-VKQ-to-FP32-per-KV-tile.patch
+bfb7497713495fc6c488056b53c79b133b4b5add11e1c04f4c2a0a2c795ae410  /home/p51/Github/A770/.worktrees/p11d-run-sh-p11-variants/third_party/patches/p11c/S-SYCL-FA-tile-cap-keys-per-block.patch
+d10a6d02692e8ae3ffe58e2c15b56f9c63dbc1a132b092ca975babc11e5abfd3  /home/p51/Github/A770/.worktrees/p11d-run-sh-p11-variants/third_party/patches/test-only/0001-sycl-allow-cpu-device-for-tests.patch

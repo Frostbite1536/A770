@@ -1,0 +1,19 @@
+[06:21:24] ccache unavailable; compiling without cache (no installation)
+[06:21:24] env via phase0
+SYCL0 device: Intel(R) Xeon(R) CPU E3-1505M v6 @ 3.00GHz
+SYCL0 max_work_group_size=8192
+SYCL0 max_compute_units=8
+SYCL0 max_wg_per_cu=1024
+[06:21:30] build upstream
+[06:24:30] correctness upstream FLASH_ATTN_EXT
+[06:25:01]   upstream FLASH_ATTN_EXT rc=0 PASS=4 FAIL=0 UNSUPPORTED=0 executed=4 (process rc=0)
+[06:25:01]   upstream FA-BIASV rc=0 PASS=16 FAIL=0 UNSUPPORTED=0 executed=16 (process rc=0)
+[06:25:01] build fp32f
+[06:28:08] correctness fp32f FLASH_ATTN_EXT
+[06:28:40]   fp32f FLASH_ATTN_EXT rc=0 PASS=4 FAIL=0 UNSUPPORTED=0 executed=4 (process rc=0)
+[06:28:40]   fp32f FA-BIASV rc=0 PASS=16 FAIL=0 UNSUPPORTED=0 executed=16 (process rc=0)
+[06:28:41] build cap
+[06:31:43] correctness cap FLASH_ATTN_EXT
+[06:32:14]   cap FLASH_ATTN_EXT rc=0 PASS=4 FAIL=0 UNSUPPORTED=0 executed=4 (process rc=0)
+[06:32:14]   cap FA-BIASV rc=0 PASS=16 FAIL=0 UNSUPPORTED=0 executed=16 (process rc=0)
+[06:32:14] done: /home/p51/Github/A770/.worktrees/p11d-run-sh-p11-variants/bench/results/p11d-run-sh-cpu-smoke-20261011/summary.md (failure status=0)

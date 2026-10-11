@@ -1,0 +1,31 @@
+INFO: Output filtered by ONEAPI_DEVICE_SELECTOR environment variable, which is set to opencl:cpu.
+To see device ids, use the --ignore-device-selectors CLI option.
+
+<LOADER>[INFO]: loaded adapter 0x0x5f3e14fdb350 (libur_adapter_opencl.so.0) from /home/p51/Github/A770/tools/oneapi-2026.1/bin/../lib/../lib/libur_adapter_opencl.so.0
+[opencl:cpu] Intel(R) OpenCL, Intel(R) Xeon(R) CPU E3-1505M v6 @ 3.00GHz OpenCL 3.0 (Build 0) [2026.21.7.0.24_160000]
+
+Platforms: 1
+Platform [#1]:
+    Version  : OpenCL 3.0 LINUX
+    Name     : Intel(R) OpenCL
+    Vendor   : Intel(R) Corporation
+    Devices  : 1
+        Type              : cpu
+        Version           : OpenCL 3.0 (Build 0)
+        Name              : Intel(R) Xeon(R) CPU E3-1505M v6 @ 3.00GHz
+        Vendor            : Intel(R) Corporation
+        Driver            : 2026.21.7.0.24_160000
+        UUID              : 8680e906-0900-fffb-fa7f-fffbebbf0000
+        DeviceID          : 591593
+        Num SubDevices    : 0
+        Num SubSubDevices : 0
+        Aspects           : cpu fp16 fp64 online_compiler online_linker queue_profiling usm_device_allocations usm_host_allocations usm_shared_allocations usm_system_allocations ext_intel_gpu_slices ext_intel_gpu_subslices_per_slice ext_intel_gpu_eu_count_per_subslice usm_atomic_host_allocations usm_atomic_shared_allocations atomic64 ext_intel_device_info_uuid ext_oneapi_srgb ext_oneapi_native_assert ext_intel_gpu_hw_threads_per_eu ext_intel_device_id ext_intel_legacy_image ext_oneapi_fragment ext_oneapi_chunk ext_oneapi_tangle ext_oneapi_limited_graph ext_oneapi_private_alloca ext_oneapi_atomic16 ext_oneapi_virtual_functions ext_intel_device_info_node_mask ext_oneapi_clock_sub_group ext_oneapi_clock_work_group ext_oneapi_clock_device
+        info::device::sub_group_sizes: 4 8 16 32 64
+        Architecture: x86_64
+default_selector()      : cpu, Intel(R) OpenCL, Intel(R) Xeon(R) CPU E3-1505M v6 @ 3.00GHz OpenCL 3.0 (Build 0) [2026.21.7.0.24_160000]
+accelerator_selector()  : No device of requested type available. Please chec...
+cpu_selector()          : cpu, Intel(R) OpenCL, Intel(R) Xeon(R) CPU E3-1505M v6 @ 3.00GHz OpenCL 3.0 (Build 0) [2026.21.7.0.24_160000]
+gpu_selector()          : No device of requested type available. Please chec...
+custom_selector(gpu)    : No device of requested type available. Please chec...
+custom_selector(cpu)    : cpu, Intel(R) OpenCL, Intel(R) Xeon(R) CPU E3-1505M v6 @ 3.00GHz OpenCL 3.0 (Build 0) [2026.21.7.0.24_160000]
+custom_selector(acc)    : No device of requested type available. Please chec...

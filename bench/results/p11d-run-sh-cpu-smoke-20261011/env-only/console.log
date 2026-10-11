@@ -1,0 +1,7 @@
+[05:24:16] ccache unavailable; compiling without cache (no installation)
+[05:24:16] env via phase0
+SYCL0 device: Intel(R) Xeon(R) CPU E3-1505M v6 @ 3.00GHz
+SYCL0 max_work_group_size=8192
+SYCL0 max_compute_units=8
+SYCL0 max_wg_per_cu=1024
+[05:24:28] done: /home/p51/Github/A770/.worktrees/p11d-run-sh-p11-variants/bench/results/p11d-run-sh-cpu-smoke-20261011/env-only/summary.md (failure status=0)
