@@ -2,12 +2,16 @@
 
 Attention and multi-GPU work for the Intel Arc A770 (Xe-HPG, `acm-g10`), in SYCL and OpenCL C, meant to plug into llama.cpp. Sibling project of [volta-fa](../volta-fa) (NVIDIA V100): same process and numerics contract, different hardware.
 
-**Status: pre-hardware.** No kernels or patches yet, and nothing has run on an A770. What exists:
+**Status: pre-hardware, day-one kit ready.** Nothing has run on an A770. What exists:
 - a CPU attention reference and numerics model with measured tolerances (carried over from volta-fa);
 - a no-sudo static toolchain (ocloc + IGC + icpx 2026.1) with a per-kernel acm-g10 report: SIMD, GRF, threads/XVE, spill, SLM, DPAS and FP64 counts;
 - compile probes that pinned down which XMX forms are legal on the A770;
 - a code study of how llama.cpp's SYCL and Vulkan backends run FlashAttention on it;
-- a Phase 0 measurement kit (not run).
+- a Phase 0 measurement kit (not run);
+- four llama.cpp SYCL patches ported from volta-fa, checked for correctness on the Intel OpenCL CPU device (`bin/sycl-cpu-tbo.sh`), not timed:
+  - 0001/0002: padded GQA in the TILE FA kernel (P-6);
+  - 0003/0004: faster K/V conversion (P-8);
+- an A/B harness and runbook for the first A770 session: `bench/patches/run.sh`, [docs/A770_BOX.md](docs/A770_BOX.md), `prompts/a770-session-1.md`. Acceptance criteria are fixed in advance in the P-6/P-8 design docs.
 
 Every performance claim in this repo must link to a file in `profiles/` or `bench/results/`. Until it does, treat it as a hypothesis.
 
