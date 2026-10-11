@@ -31,24 +31,37 @@ unlike on CUDA, the "repacked weights" question is partly settled upstream on SY
 
 Phase 0 should record which path each matmul takes at 1–16 tokens:
 - reordered MMVQ/DMMV, MMQ, or oneMKL/oneDNN GEMM;
-- with `GGML_SYCL_DISABLE_OPT` on and off;
+- with the reorder optimisation on and off (`GGML_SYCL_ENABLE_OPT=0` turns it off; there is no `GGML_SYCL_DISABLE_OPT` at the pin);
 - and Vulkan's mul_mat_vec / coopmat paths.
 
-## 3. A small-batch XMX matmul maps naturally (hypothesis)
+## 3. Upstream SYCL already has a small-batch XMX matmul (checked at the pin)
 
-- **Shape.** Volta's `mma.m8n8k4` puts the 8 tokens of a tile on the M side. The A770's `joint_matrix` 8×8×16 at
-  sub-group 8 has the same shape class.
-- **Layout.** On the V100, staging the weights through shared memory, in their native layout, reached 0.76–0.90×
-  of a fully repacked layout with decode and math included (`volta-fa/bench/micro/qload.cu`). On SYCL, the reordered
-  layout above may be the natural input instead.
-- **Activations.** The A770's hardware also has int8 DPAS, which Volta lacks, but this repo's invariants allow only
-  `joint_matrix` with f16/bf16 inputs and f32 accumulation. Feeding q8_1 activations to XMX would need a manager
-  decision. Within the invariants, FP16 activations with a power-of-two scale per slice (§4) are the natural input,
-  as on Volta.
-- **Decode tricks.** volta-fa's exact ones work on any FP16 ALU: OR 4-bit codes into 0x6400 (1024 + q), then one
-  half2 FMA; for Q6_K, codes at bits 4–9 and one FMA with sc/16 and −96·sc.
+`ggml-sycl/fused-gemm.cpp` is an XMX "dequant-GEMM": it decodes the weights inside the GEMM into `joint_matrix`
+tiles, for up to `GGML_SYCL_FG_MAX_N` = 64 columns (tokens).
+- **Types:** Q8_0, IQ4_NL, Q4_K, Q5_K, Q6_K, IQ4_XS and the IQ1–IQ3 formats.
+- **A770 support:** it has explicit Xe-HPG (Arc A) combinations: f16×f16 and bf16×bf16, 8×8×16 at sub-group 8.
+  Which combinations a device gets is decided at run time from `matrix_combinations` and logged once as `XMX
+  dequant-GEMM combinations available 0x…`.
+- **Routing:** dense MUL_MAT reaches it from `ggml_sycl_op_mul_mat_sycl` (`ggml-sycl.cpp` ≈ line 3132), i.e. when
+  neither the MMVQ/DMMV nor the MMQ path was chosen. MoE uses a grouped variant.
+- **Controls:** `GGML_SYCL_XMX_GATHER_TYPES` (bit mask per type) and `GGML_SYCL_XMX_GATHER_SHAPES` (bit mask per
+  combination). `GGML_SYCL_DYNAMIC_PRECISION` picks the operand type (f16, bf16 or tf32).
 
-This is worth a design doc only if Phase 0 (§1) shows a gap at 5–16 tokens.
+So the volta-fa P-9 idea, a tensor-core matmul that decodes quantised weights in place for small batches, already
+exists upstream on SYCL. The A770 question is therefore not whether to build one but:
+- which path each matmul takes at 1–16 tokens on the A770 (MMVQ/DMMV, MMQ or the fused XMX GEMM);
+- how close each path gets to 560 GB/s;
+- whether the fused GEMM is faster than MMVQ from some token count on.
+
+The `XMX_GATHER_*` masks give a same-binary A/B.
+
+What still carries over from volta-fa if the fused GEMM turns out slow on the A770:
+- **Native layout plus staging** reached 0.76–0.90× of a repacked layout on the V100.
+- **The exact FP16 decode tricks:** OR 4-bit codes into 0x6400 (1024 + q) and one half2 FMA; for Q6_K, codes at bits
+  4–9 and one FMA with sc/16 and −96·sc.
+- **Occupancy-based K split and a reduction that loads all partials together** (§5).
+- **int8 is out of scope:** the hardware has int8 DPAS, but this repo's invariants allow only f16/bf16 `joint_matrix`
+  inputs, so an int8 path would need a manager decision.
 
 ## 4. Numerics: the q8_1 range limit applies to SYCL too
 
@@ -56,6 +69,8 @@ This is worth a design doc only if Phase 0 (§1) shows a gap at 5–16 tokens.
   `quantize.hpp` writes `ds = half2(half(d), half(sum))`, so sums above 65504 become inf at activations around 1e5,
   and d underflows around 1e-5. Vulkan's `block_q8_1` also has an FP16 `ds` (`types.glsl`); whether its sum
   overflows the same way was not checked.
+- **The fused XMX GEMM (§3) converts src1 to f16, bf16 or tf32.** If it uses f16 without scaling, activations above
+  65504 overflow there too; bf16 and tf32 keep FP32's range. Not checked; the range tests below answer it.
 - **What volta-fa measured.** Its range tests (`volta-fa/third_party/patches-local/0009-*.patch`,
   `test_mul_mat_range`) passed 18/35 on the CUDA current path and 35/35 with patch 0008, which scales each 256-value
   slice by an exact power of two before converting to FP16.
