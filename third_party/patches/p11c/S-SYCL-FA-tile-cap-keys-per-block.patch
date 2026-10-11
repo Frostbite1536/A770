@@ -1,0 +1,99 @@
+Subject: [PATCH] SYCL: cap FA TILE keys per block
+
+Why: p11b CPU numerics at A770 geometry measured TILE NMSE about 8e-6
+at 1024 keys per accumulator and about 1.5e-4 at 2048; g-min fails
+at 4096, while g-a770 reaches 0.44 / 2.3 at 8192 / 16384 (tolerance 5e-4).
+Tested on: Intel OpenCL CPU device only
+Applies independently on llama.cpp 79e2e74 + A770 patches 0001-0005.
+Candidate only; A770 A/B decision pending.
+
+diff --git a/ggml/src/ggml-sycl/fattn-common.hpp b/ggml/src/ggml-sycl/fattn-common.hpp
+--- a/ggml/src/ggml-sycl/fattn-common.hpp
++++ b/ggml/src/ggml-sycl/fattn-common.hpp
+@@ -907,7 +907,7 @@
+ template <int DV, int ncols1, int ncols2, fattn_kernel_t fattn_kernel, int warp_size, bool use_large_grf = false>
+ void launch_fattn(
+     ggml_backend_sycl_context & ctx, ggml_tensor * dst, const int nwarps, const size_t nbytes_shared,
+-    const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k) {
++    const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const int max_keys = 0) {
+ 
+     constexpr int ncols = ncols1 * ncols2;
+ 
+@@ -1079,6 +1079,10 @@
+ 
+         // parallel_blocks must not be larger than what the tensor size allows:
+         parallel_blocks = std::min(parallel_blocks, ntiles_KQ);
++        if (max_keys > 0) {
++            const int min_blocks = (int64_t(ntiles_KQ) * nbatch_fa + max_keys - 1) / max_keys;
++            parallel_blocks = std::min(ntiles_KQ, std::max(parallel_blocks, min_blocks));
++        }
+         // todo fix the hard code change
+         // parallel_blocks = ntiles_KQ;
+ 
+diff --git a/ggml/src/ggml-sycl/fattn-tile.hpp b/ggml/src/ggml-sycl/fattn-tile.hpp
+--- a/ggml/src/ggml-sycl/fattn-tile.hpp
++++ b/ggml/src/ggml-sycl/fattn-tile.hpp
+@@ -11,6 +11,9 @@
+ 
+ // Tune this column budget from A770 measurements.
+ #define GGML_SYCL_FATTN_TILE_PAD_MAX_COLS 32
++
++// Measured p11b bound: 1024 keys per TILE accumulator (NMSE about 8e-6).
++#define GGML_SYCL_FATTN_TILE_MAX_KEYS_PER_BLOCK 1024
+ 
+ #define GGML_SYCL_FATTN_TILE_CONFIG_CASE(DKQ_, DV_, ncols_, nthreads, occupancy, nbatch_fa, nbatch_K) \
+     if (DKQ == (DKQ_) && DV == (DV_) && ncols == (ncols_)) {                                          \
+@@ -1104,7 +1107,7 @@
+                 const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+                 launch_fattn<DV, cols_per_block/ncols2, ncols2,
+                     flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
+-                    (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
++                    (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false, GGML_SYCL_FATTN_TILE_MAX_KEYS_PER_BLOCK);
+                 return;
+             }
+         }
+@@ -1115,7 +1118,7 @@
+                 const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+                 launch_fattn<DV, cols_per_block/ncols2, ncols2,
+                     flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
+-                    (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
++                    (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false, GGML_SYCL_FATTN_TILE_MAX_KEYS_PER_BLOCK);
+                 return;
+             }
+         }
+@@ -1126,7 +1129,7 @@
+                 const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+                 launch_fattn<DV, cols_per_block/ncols2, ncols2,
+                     flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
+-                    (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
++                    (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false, GGML_SYCL_FATTN_TILE_MAX_KEYS_PER_BLOCK);
+                 return;
+             }
+         }
+@@ -1139,7 +1142,7 @@
+             const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+             launch_fattn<DV, cols_per_block/ncols2, ncols2,
+                 flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
+-                (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
++                (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false, GGML_SYCL_FATTN_TILE_MAX_KEYS_PER_BLOCK);
+             return;
+         }
+     }
+@@ -1150,7 +1153,7 @@
+         const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+         launch_fattn<DV, cols_per_block/ncols2, ncols2,
+             flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
+-            (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
++            (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false, GGML_SYCL_FATTN_TILE_MAX_KEYS_PER_BLOCK);
+         return;
+     }
+ 
+@@ -1160,7 +1163,7 @@
+         const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
+         launch_fattn<DV, cols_per_block/ncols2, ncols2,
+             flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
+-            (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
++            (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false, GGML_SYCL_FATTN_TILE_MAX_KEYS_PER_BLOCK);
+         return;
+     }
+ 

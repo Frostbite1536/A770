@@ -97,3 +97,13 @@ At g-min, both configurations pass 8/16: VEC 4/4, TILE 4/12; TILE additionally f
 A's unchanged p6a subset passes 85/85 at both CPU defaults and g-a770.
 CPU-device evidence only: A770 numerics and maximum work-group size, real-model V statistics, any fix, and timing are unverified. No fix is proposed or selected.
 Commands, all six per-case NMSE/route/split tables, margins, scratch-only diagnostic diffs, wall times and gzipped logs: [p11b results](../../bench/results/p11b-sycl-fa-fp16-geometry-20261011/README.txt).
+
+**Candidate fixes (CPU numerics, static; 2026-10-11).** Independent F (FP32 flush per KV tile) and S (1024-key cap per TILE block) remain outside the numbered series.
+Both pass 16/16 biased-V cases at g-a770 and g-min on the Intel OpenCL CPU device; base reproduces 12/16 and 8/16 respectively.
+F retains base's splits; worst printed TILE NMSE is 0.000000005. S has 1024 keys per TILE accumulator in these cases, with worst printed NMSE 0.000008770 (tolerance 0.000500000).
+Each passes the exact P filter 97/97 and P-6 filter 117/117 at both CPU-default and g-a770 geometry.
+P includes the historical 85 cases plus 12 from 0002; P-6 includes all 112 from 0002 plus five pre-existing matches. No tests or tolerances were changed.
+Fresh acm-g10 base/F reports compare every emitted TILE dkq64/128/256 instance: all retain SIMD32 and 128 GRF.
+Active-instance spill deltas (F minus base) are D64 −576..+1024, D128 +96..+2144, D256 −384..+2592 bytes; the per-instance table records the variation.
+CPU numerics and static resources only: A770 numerics or speed, driver work-group limits and real-model V statistics remain unverified. Neither candidate is chosen.
+[Candidate patches](../../third_party/patches/p11c/), commands, complete NMSE/split tables, coverage lines, wall times, static comparison and diagnostic diffs: [p11c results](../../bench/results/p11c-sycl-fa-tile-fp16-fix-20261011/README.txt).
