@@ -60,3 +60,12 @@ end-to-end model decode, and the INT_MAX fallback at runtime.
 A770 work: run the same JIT benchmark with the GPU selector, record its
 median conversion and D2D times, run backend correctness, then measure
 end-to-end decode with quantised caches. This ticket makes no ship decision.
+
+## Accept if (A770, `bench/patches/run.sh`; manager-defined 2026-10-10, before any A770 run)
+
+1. **Correctness**: `conv` and `conv8` show no new FLASH_ATTN_EXT, CPY or GET_ROWS failures vs `upstream`. The f16→q4_0 CPY flake is rerun on both before it is attributed. The microbenchmark is bit-exact on the A770 (`micro` step).
+2. **Microbenchmark** (A770, median of `--reps`): at D=128, vec8 is ≥ 1.5× upstream on every shape, and neither variant is more than 3% slower than upstream on any shape. On the V100 the same port gave 3.1–3.5× at D=128 and 1.7–1.9× at D=256.
+3. **Kernel**: with q8_0 and q4_0 K/V at 4–16 tokens and kv 16384, the `conv8` median over ≥ 3 interleaved rounds is ≥ 1.2× `p6` at D=128. No F16 case moves by more than ±3%. 1–2-token cases run VEC (no conversion; research §3) and must be unchanged (±3%).
+4. **End to end**: Llama-3.1-8B with `-ctk q8_0 -ctv q8_0 -p 4,8 -d 16384` is ≥ 5% faster with `conv8` than with `p6`, and tg32 is unchanged (±3%).
+
+Reject 0004 if 2 fails for vec8. Reject 0003 if its rows variant is slower than upstream. Thresholds are fixed before measurement; the owner may revise them before the session, not after.

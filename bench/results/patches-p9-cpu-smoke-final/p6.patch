@@ -1,0 +1,211 @@
+diff --git a/ggml/src/ggml-sycl/CMakeLists.txt b/ggml/src/ggml-sycl/CMakeLists.txt
+index 1697ecd95..d91bd0606 100644
+--- a/ggml/src/ggml-sycl/CMakeLists.txt
++++ b/ggml/src/ggml-sycl/CMakeLists.txt
+@@ -171,7 +171,13 @@ endif()
+ if (GGML_SYCL_TARGET STREQUAL "INTEL")
+     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
+     if (NOT GGML_SYCL_DEVICE_ARCH)
+-        target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
++        # The OpenCL CPU JIT rejects this Intel GPU build option.
++        if (NOT "$ENV{GGML_SYCL_TEST_CPU}" STREQUAL "1")
++            target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
++        else()
++            # Keep CPU JIT programs small; leave compiler optimization enabled.
++            target_link_options(ggml-sycl PRIVATE -fsycl-device-code-split=per_kernel)
++        endif()
+     else()
+         message(STATUS "Skipping -ze-intel-greater-than-4GB-buffer-required for spir64_gen AOT")
+     endif()
+diff --git a/ggml/src/ggml-sycl/common.hpp b/ggml/src/ggml-sycl/common.hpp
+index 475509372..716d7a80a 100644
+--- a/ggml/src/ggml-sycl/common.hpp
++++ b/ggml/src/ggml-sycl/common.hpp
+@@ -774,7 +774,11 @@ static __dpct_inline__ float get_alibi_slope(const float    max_bias,
+     const float base = h < n_head_log2 ? m0 : m1;
+     const int   exph = h < n_head_log2 ? h + 1 : 2*(h - n_head_log2) + 1;
+ 
+-    return dpct::pow(base, exph);
++    // CPU-JIT workaround: avoid missing 32-wide pown for ALiBi slopes.
++    // P-6 does not pad under ALiBi; the rounding difference is within test tolerance.
++    float r = 1.0f;
++    for (int i = 0; i < exph; ++i) r *= base;
++    return r;
+ }
+ 
+ static const sycl::uint3 init_fastdiv_values(uint32_t d) {
+diff --git a/ggml/src/ggml-sycl/dpct/helper.hpp b/ggml/src/ggml-sycl/dpct/helper.hpp
+index 85af4cab6..efde39e20 100644
+--- a/ggml/src/ggml-sycl/dpct/helper.hpp
++++ b/ggml/src/ggml-sycl/dpct/helper.hpp
+@@ -909,6 +909,20 @@ namespace dpct
+         }
+ 
+         inline std::string get_preferred_gpu_platform_name() {
++            // Local correctness harness only; the default device becomes SYCL0.
++            const char * test_cpu = getenv("GGML_SYCL_TEST_CPU");
++            if (test_cpu && std::strcmp(test_cpu, "1") == 0) {
++                const auto device = sycl::device(sycl::default_selector_v);
++                const auto platform = device.get_platform();
++                const auto name = platform.get_info<sycl::info::platform::name>();
++                if (!device.is_cpu() || device.get_backend() != sycl::backend::opencl ||
++                    name.find("Intel") == std::string::npos) {
++                    throw std::runtime_error("GGML_SYCL_TEST_CPU=1 requires an Intel OpenCL CPU as SYCL0");
++                }
++                std::cerr << "GGML_SYCL_TEST_CPU: SYCL0 is Intel OpenCL CPU: "
++                          << device.get_info<sycl::info::device::name>() << std::endl;
++                return name;
++            }
+             std::string result;
+ 
+             std::string filter = "";
+diff --git a/ggml/src/ggml-sycl/fattn-tile.hpp b/ggml/src/ggml-sycl/fattn-tile.hpp
+index dcdcad88a..e5e5d5d85 100644
+--- a/ggml/src/ggml-sycl/fattn-tile.hpp
++++ b/ggml/src/ggml-sycl/fattn-tile.hpp
+@@ -9,6 +9,9 @@
+ 
+ namespace syclex = sycl::ext::oneapi::experimental;
+ 
++// Tune this column budget from A770 measurements.
++#define GGML_SYCL_FATTN_TILE_PAD_MAX_COLS 32
++
+ #define GGML_SYCL_FATTN_TILE_CONFIG_CASE(DKQ_, DV_, ncols_, nthreads, occupancy, nbatch_fa, nbatch_K) \
+     if (DKQ == (DKQ_) && DV == (DV_) && ncols == (ncols_)) {                                          \
+         static_assert((nthreads)          <= 512, "bad nthreads");                                    \
+@@ -723,13 +726,18 @@ static void flash_attn_tile(const char *  Q,
+ 
+     const int col_Q_0 = item_ct1.get_group(2) * ncols1;  // Index of the first Q column for this SYCL block to work on.
+ 
+-    const int           sequence  = item_ct1.get_group(0) / (ne02 / ncols2);
+-    const int           head0     = item_ct1.get_group(0) * ncols2 - sequence * ne02;  // == item_ct1.get_group(0) % (ne02/ncols2)
+     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
++    const int ntiles_z_gqa = (gqa_ratio + ncols2 - 1) / ncols2;
++    const int z        = item_ct1.get_group(0);
++    const int sequence = z / (ntiles_z_gqa * ne12);
++    const int kv_head  = (z / ntiles_z_gqa) % ne12;
++    const int zt_gqa   = z % ntiles_z_gqa;
++    // If ncols2 divides G, ntiles_z_gqa = G/ncols2 and head0 = z*ncols2 - sequence*ne02.
++    const int head0    = kv_head * gqa_ratio + zt_gqa * ncols2;
+     const float * Q_f  = (const float *) (Q + nb03*sequence + nb02* head0);
+-    const sycl::half2 * K_h2      = (const sycl::half2 *) (K + nb13 * sequence + nb12 * (head0 / gqa_ratio));
++    const sycl::half2 * K_h2      = (const sycl::half2 *) (K + nb13 * sequence + nb12 * kv_head);
+     const sycl::half2 * V_h2 =
+-        (const sycl::half2 *) (V + nb23 * sequence + nb22 * (head0 / gqa_ratio));  // K and V have same shape
++        (const sycl::half2 *) (V + nb23 * sequence + nb22 * kv_head);  // K and V have same shape
+ 
+     const sycl::half * maskh = mask ? (const sycl::half *) (mask + nb33 * (sequence % ne33)) : nullptr;
+ 
+@@ -823,10 +831,13 @@ static void flash_attn_tile(const char *  Q,
+                 i0 + (item_ct1.get_local_id(1) % np) * (warp_size * cpy_ne_D) + item_ct1.get_local_id(2) * cpy_ne_D <
+                     DKQ) {
+                 __dpct_align__(16) float tmp_f[cpy_ne_D] = { 0.0f };
+-                ggml_sycl_memcpy_1<sizeof(tmp_f)>(
+-                    tmp_f, &Q_f[c * (nb02 / sizeof(float)) + fastmodulo(col_Q_0 + j, ne01) * (nb01 / sizeof(float)) +
+-                                i0 + (item_ct1.get_local_id(1) % np) * (warp_size * cpy_ne_D) +
+-                                item_ct1.get_local_id(2) * cpy_ne_D]);
++                // Phantom heads retain zeros in Q_tmp without reading global Q.
++                if (ncols2 == 1 || zt_gqa * ncols2 + c < gqa_ratio) {
++                    ggml_sycl_memcpy_1<sizeof(tmp_f)>(
++                        tmp_f, &Q_f[c * (nb02 / sizeof(float)) + fastmodulo(col_Q_0 + j, ne01) * (nb01 / sizeof(float)) +
++                                    i0 + (item_ct1.get_local_id(1) % np) * (warp_size * cpy_ne_D) +
++                                    item_ct1.get_local_id(2) * cpy_ne_D]);
++                }
+ 
+ #pragma unroll
+                 for (int i1 = 0; i1 < cpy_ne_D; ++i1) {
+@@ -974,6 +985,9 @@ static void flash_attn_tile(const char *  Q,
+ #pragma unroll
+         for (int jc0 = 0; jc0 < cpw; ++jc0) {
+             const int   jc   = jc0 + (item_ct1.get_local_id(1) / np) * cpw;
++            if (ncols2 > 1 && zt_gqa * ncols2 + jc % ncols2 >= gqa_ratio) {
++                continue;
++            }
+             const float sink = ((const float *) sinks)[head0 + jc % ncols2];
+ 
+             float       KQ_max_new_j = sycl::fmax((float) KQ_max[jc0], sink);
+@@ -1007,6 +1021,10 @@ static void flash_attn_tile(const char *  Q,
+         const int j = jc / ncols2;
+         const int c = jc % ncols2;
+ 
++        if (ncols2 > 1 && zt_gqa * ncols2 + c >= gqa_ratio) {
++            continue;
++        }
++
+         if (ncols1 > 1 && col_Q_0 + j >= int(ne01.z())) {
+             return;
+         }
+@@ -1194,6 +1212,18 @@ static void launch_fattn_tile_switch_ncols2(ggml_backend_sycl_context & ctx, ggm
+     }
+ 
+     if constexpr (DV <= 256) {
++        // For non-power-of-two G < 8, the next power of two is 4 or 8.
++        const int padded_gqa_ratio = gqa_ratio <= 4 ? 4 : 8;
++        if (use_gqa_opt && (gqa_ratio & (gqa_ratio - 1)) != 0 && gqa_ratio < 8 &&
++            Q->ne[1] * padded_gqa_ratio <= GGML_SYCL_FATTN_TILE_PAD_MAX_COLS) {
++            if (padded_gqa_ratio == 4) {
++                launch_fattn_tile_switch_ncols1<DKQ, DV, 4, use_logit_softcap>(ctx, dst);
++            } else {
++                launch_fattn_tile_switch_ncols1<DKQ, DV, 8, use_logit_softcap>(ctx, dst);
++            }
++            return;
++        }
++
+         if (use_gqa_opt && gqa_ratio % 8 == 0) {
+             launch_fattn_tile_switch_ncols1<DKQ, DV, 8, use_logit_softcap>(ctx, dst);
+             return;
+diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
+index d2c1a1a44..682e42b95 100644
+--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
+@@ -237,6 +237,11 @@ static ggml_sycl_device_info ggml_sycl_init() {
+         info.devices[i].cc =
+             100 * prop.get_major_version() + 10 * prop.get_minor_version();
+         info.devices[i].nsm = prop.get_max_compute_units() / 16; //16: Number of Xe Cores
++        const char * test_cpu = getenv("GGML_SYCL_TEST_CPU");
++        if (test_cpu && std::strcmp(test_cpu, "1") == 0 && device.is_cpu()) {
++            // CPU compute units are not groups of 16 Xe cores.
++            info.devices[i].nsm = prop.get_max_compute_units();
++        }
+         info.devices[i].opt_feature.reorder = device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
+ #if GGML_SYCL_DNNL
+         info.devices[i].opt_feature.onednn_optimized_gemm = ggml_sycl_dnnl_detect_optimized_gemm(i);
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 4e3c6942b..0521b919b 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -11695,6 +11695,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+     // KV not a multiple of the compaction workgroup size.
+     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 1, { 8, 1}, 5003, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,  512));
+ 
++    // Non-power-of-two GQA ratios at small batch sizes: backends may pad the Q heads per tile
++    // to the next power of two and mask the extra heads (including their attention sinks).
++    for (int hs : { 128, 256 }) {
++        for (int gqa : { 3, 5, 6, 7 }) {
++            for (int nb : { 1, 2, 3, 4, 8, 16 }) {
++                for (bool sinks : { false, true }) {
++                    test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 2, {gqa, 1}, 4096, nb, true, sinks, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
++                }
++            }
++            for (int nb : { 3, 8 }) {
++                test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 2, {gqa, 1}, 4096, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
++            }
++        }
++    }
++
+     // Sparse gather: native block sizes, padded slots, and head/batch strides.
+     for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL}) {
+         test_cases.emplace_back(new test_flash_attn_ext(128, 96, 2, {8, 2}, 5003, 3, true, false, 0, 0, GGML_PREC_F32, type, type, {0, 1, 2, 3}, true, false, 257));
+@@ -12186,6 +12201,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+     }
+ 
+     // Qwen3-VL-8B https://github.com/ggml-org/llama.cpp/issues/17012
++    // P9 shared P6/P8 perf cases, including power-of-two controls.
++    for (int hs : {128, 256}) for (int g : {1, 2, 3, 4, 5, 6, 7, 8})
++    for (int kv : {4096, 16384}) for (int nb : {1, 2, 3, 4, 8, 16})
++    for (ggml_type ty : {GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
++        test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 2, {g, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, ty, ty));
++    }
+     test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, 5776, 5776, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+ 
+     // Sparse flash attention (n_kv_max hint) decode across KV depths.

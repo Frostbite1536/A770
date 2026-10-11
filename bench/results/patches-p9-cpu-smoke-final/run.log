@@ -1,0 +1,8 @@
+[22:23:58] ccache unavailable; compiling without cache (no installation)
+[22:23:58] build upstream
+[22:27:03] correctness upstream FLASH_ATTN_EXT
+[22:27:03]   upstream FLASH_ATTN_EXT rc=0 PASS=4 FAIL=0 UNSUPPORTED=0 executed=4
+[22:27:04] build p6
+[22:30:11] correctness p6 FLASH_ATTN_EXT
+[22:30:11]   p6 FLASH_ATTN_EXT rc=0 PASS=4 FAIL=0 UNSUPPORTED=0 executed=4
+[22:30:11] done: /home/p51/Github/A770/.worktrees/p9-day-one-kit/bench/results/patches-p9-cpu-smoke-final/summary.md (failure status=0)
