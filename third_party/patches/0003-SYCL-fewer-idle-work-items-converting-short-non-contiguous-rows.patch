@@ -1,0 +1,95 @@
+Subject: [PATCH] SYCL: fewer idle work-items converting short non-contiguous rows
+
+Short K/V rows used a full 256-work-item group along each row, leaving
+most work-items idle. Round the useful items per row to WARP_SIZE and
+put several rows in a work-group. Keep the arithmetic, long-row launch
+parameters, contiguous conversion geometry, and the unary global-range
+downsampling guard. Declare the changed kernels' sub-group size.
+
+Tested on: Intel OpenCL CPU device only
+
+---
+diff --git a/ggml/src/ggml-sycl/convert.cpp b/ggml/src/ggml-sycl/convert.cpp
+index b660b56ab..4b5cc30d6 100644
+--- a/ggml/src/ggml-sycl/convert.cpp
++++ b/ggml/src/ggml-sycl/convert.cpp
+@@ -560,7 +560,10 @@ static void dequantize_block_nc(const void * __restrict__ vx, dst_t * __restrict
+         return;
+     }
+ 
+-    const int64_t i01 = item_ct1.get_group(1);
++    const int64_t i01 = item_ct1.get_group(1) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
++    if (i01 >= ne01) {
++        return;
++    }
+     const int64_t i02 = item_ct1.get_group(0) % ne02;
+     const int64_t i03 = item_ct1.get_group(0) / ne02;
+ 
+@@ -597,11 +600,14 @@ static void dequantize_block_nc_sycl(const void *    vx,
+                                   const int64_t   s02,
+                                   const int64_t   s03,
+                                   dpct::queue_ptr stream) {
+-    const dpct::dim3 num_blocks((ne00 + 2 * SYCL_DEQUANTIZE_BLOCK_SIZE - 1) / (2 * SYCL_DEQUANTIZE_BLOCK_SIZE), ne01,
+-                                ne02 * ne03);
+-    stream->parallel_for(sycl::nd_range<3>(num_blocks * sycl::range<3>(1, 1, SYCL_DEQUANTIZE_BLOCK_SIZE),
+-                                           sycl::range<3>(1, 1, SYCL_DEQUANTIZE_BLOCK_SIZE)),
+-                         [=](sycl::nd_item<3> item_ct1) {
++    // Put several short K/V rows in one work-group.
++    const int64_t items_per_row = ne00 < 2 * SYCL_DEQUANTIZE_BLOCK_SIZE ?
++        ceil_div(ne00, int64_t(2 * WARP_SIZE)) * WARP_SIZE : SYCL_DEQUANTIZE_BLOCK_SIZE;
++    const int64_t rows_per_wg = SYCL_DEQUANTIZE_BLOCK_SIZE / items_per_row;
++    const dpct::dim3 num_blocks(ceil_div(ne00, 2 * items_per_row), ceil_div(ne01, rows_per_wg), ne02 * ne03);
++    const sycl::range<3> local_size(1, rows_per_wg, items_per_row);
++    stream->parallel_for(sycl::nd_range<3>(num_blocks * local_size, local_size),
++                         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                              GGML_UNUSED(item_ct1);
+                              dequantize_block_nc<qk, qr, dequantize_kernel>(vx, y, ne00, ne01, ne02, s01, s02, s03);
+                          });
+@@ -614,7 +620,10 @@ static void convert_unary_nc(const void * __restrict__ vx, dst_t * __restrict__
+     const int64_t work_group_size = item_ct1.get_local_range(2);
+     const int64_t global_id       = item_ct1.get_local_id(2) + work_group_size * item_ct1.get_group(2);
+ 
+-    const int64_t i01 = item_ct1.get_group(1);
++    const int64_t i01 = item_ct1.get_group(1) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
++    if (i01 >= ne01) {
++        return;
++    }
+     const int64_t i02 = item_ct1.get_group(0) % ne02;
+     const int64_t i03 = item_ct1.get_group(0) / ne02;
+ 
+@@ -629,7 +638,7 @@ static void convert_unary_nc(const void * __restrict__ vx, dst_t * __restrict__
+     }
+ }
+ 
+-template <typename src_t, typename dst_t>
++template <typename src_t, typename dst_t, bool pack_rows = true>
+ static void convert_unary_nc_sycl(const void * __restrict__ vx, dst_t * __restrict__ y,
+                                   const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
+                                   const int64_t s01, const int64_t s02, const int64_t s03, dpct::queue_ptr queue) {
+@@ -641,15 +650,24 @@ static void convert_unary_nc_sycl(const void * __restrict__ vx, dst_t * __restri
+     // TODO: Downsample logic is separated from the kernel, a rewrite is desirable
+     int64_t        downsized_workgroup = downsample_sycl_global_range(global_size[0], SYCL_DEQUANTIZE_BLOCK_SIZE);
+     sycl::range<3> workgroup_size(1, 1, downsized_workgroup);
++    if (pack_rows && ne00 < SYCL_DEQUANTIZE_BLOCK_SIZE) {
++        const int64_t items_per_row = ceil_div(ne00, int64_t(WARP_SIZE)) * WARP_SIZE;
++        if (items_per_row <= downsized_workgroup) {
++            const int64_t rows_per_wg = downsized_workgroup / items_per_row;
++            workgroup_size = sycl::range<3>(1, rows_per_wg, items_per_row);
++            global_size = sycl::range<3>(ne02 * ne03, ceil_div(ne01, rows_per_wg), ceil_div(ne00, items_per_row));
++        }
++    }
+ 
+-    queue->parallel_for(sycl::nd_range<3>(global_size * workgroup_size, workgroup_size), [=](sycl::nd_item<3> item_ct1) {
++    queue->parallel_for(sycl::nd_range<3>(global_size * workgroup_size, workgroup_size),
++                       [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+         convert_unary_nc<src_t>(vx, y, ne00, ne01, ne02, s01, s02, s03, item_ct1);
+     });
+ }
+ 
+ template <typename src_t, typename dst_t>
+ static void convert_unary_sycl(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr queue) {
+-    convert_unary_nc_sycl<src_t>(vx, y, k, 1, 1, 1, k, k, k, queue);
++    convert_unary_nc_sycl<src_t, dst_t, false>(vx, y, k, 1, 1, 1, k, k, k, queue);
+ }
+ 
+ 

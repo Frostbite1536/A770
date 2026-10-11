@@ -1,0 +1,144 @@
+Subject: [PATCH] SYCL: vectorized dequantization of non-contiguous q4_0/q8_0
+
+Convert eight values per work-item for quantized K/V cache views, with
+loads requiring only two-byte alignment and aligned 8/16-byte stores.
+Keep the upstream dfloat2 arithmetic, including half intermediate
+rounding, for half and float destinations. Use the generic converter
+for partial blocks or launches whose rounded item count exceeds INT_MAX;
+check that bound before multiplying row counts. Keep value offsets wide.
+
+Tested on: Intel OpenCL CPU device only
+
+---
+diff --git a/ggml/src/ggml-sycl/convert.cpp b/ggml/src/ggml-sycl/convert.cpp
+index 4b5cc30d6..d84f7a32e 100644
+--- a/ggml/src/ggml-sycl/convert.cpp
++++ b/ggml/src/ggml-sycl/convert.cpp
+@@ -2,6 +2,8 @@
+ #include "dequantize.hpp"
+ #include "presets.hpp"
+ 
++#include <climits>
++
+ template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
+ static void dequantize_block(const void * __restrict__ vx, dst_t * __restrict__ y, const int64_t k,
+                              const sycl::nd_item<3> &item_ct1) {
+@@ -612,6 +614,100 @@ static void dequantize_block_nc_sycl(const void *    vx,
+                              dequantize_block_nc<qk, qr, dequantize_kernel>(vx, y, ne00, ne01, ne02, s01, s02, s03);
+                          });
+ }
++// Quant blocks have only 2-byte alignment. Keep the upstream dfloat2 arithmetic and rounding.
++template <ggml_type type, typename dst_t>
++static void dequantize_block_q_0_nc(const void * __restrict__ vx, dst_t * __restrict__ y,
++        const int64_t ne00, const int64_t ne01, const int64_t ne02,
++        const int64_t s01, const int64_t s02, const int64_t s03,
++        const sycl::nd_item<3> & item_ct1) {
++    static_assert(type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q8_0, "bad type");
++    static_assert(QK4_0 == 32 && QK8_0 == 32, "bad block size");
++    const int nth_row = ne00/8;
++    const int64_t i = item_ct1.get_global_id(2);
++    if (i >= ne01*nth_row) {
++        return;
++    }
++    const int i01 = i / nth_row;
++    const int64_t i00 = 8*(i - int64_t(i01)*nth_row);
++    const int iqs = i00 % 32;
++    const int64_t i02 = item_ct1.get_group(0) % ne02;
++    const int64_t i03 = item_ct1.get_group(0) / ne02;
++    const int64_t ib = i03*s03 + i02*s02 + int64_t(i01)*s01 + i00/32;
++    dst_t * yb = y + ((i03*ne02 + i02)*ne01 + i01)*ne00 + (i00 - iqs);
++
++    if constexpr (type == GGML_TYPE_Q8_0) {
++        const block_q8_0 * x = (const block_q8_0 *) vx + ib;
++        const dfloat d = x->d;
++        int8_t q[8];
++        __builtin_memcpy(q, __builtin_assume_aligned(x->qs + iqs, 2), 8);
++        alignas(16) dst_t values[8];
++#pragma unroll
++        for (int k = 0; k < 8; k += 2) {
++            dfloat2 v;
++            v.x() = q[k + 0];
++            v.y() = q[k + 1];
++#ifdef GGML_SYCL_F16
++            v.s0() *= d;
++            v.s1() *= d;
++#else
++            v.x() *= d;
++            v.y() *= d;
++#endif
++            values[k + 0] = ggml_sycl_cast<dst_t>(v.x());
++            values[k + 1] = ggml_sycl_cast<dst_t>(v.y());
++        }
++        constexpr int ne_cpy = 16/sizeof(dst_t) < 8 ? 16/sizeof(dst_t) : 8;
++#pragma unroll
++        for (int k = 0; k < 8; k += ne_cpy) {
++            __builtin_memcpy(__builtin_assume_aligned(yb + iqs + k, 16), values + k, ne_cpy*sizeof(dst_t));
++        }
++    } else {
++        const block_q4_0 * x = (const block_q4_0 *) vx + ib;
++        const dfloat d = x->d;
++        uint8_t q[4];
++        __builtin_memcpy(q, __builtin_assume_aligned(x->qs + iqs/2, 2), 4);
++        alignas(16) dst_t lo[4];
++        alignas(16) dst_t hi[4];
++#pragma unroll
++        for (int k = 0; k < 4; ++k) {
++            dfloat2 v;
++            v.x() = q[k] & 0xF;
++            v.y() = q[k] >> 4;
++#ifdef GGML_SYCL_F16
++            v.s0() = (v.s0() - 8.0f) * d;
++            v.s1() = (v.s1() - 8.0f) * d;
++#else
++            v.x() = (v.x() - 8.0f) * d;
++            v.y() = (v.y() - 8.0f) * d;
++#endif
++            lo[k] = ggml_sycl_cast<dst_t>(v.x());
++            hi[k] = ggml_sycl_cast<dst_t>(v.y());
++        }
++        __builtin_memcpy(__builtin_assume_aligned(yb +      iqs/2, 4*sizeof(dst_t)), lo, 4*sizeof(dst_t));
++        __builtin_memcpy(__builtin_assume_aligned(yb + 16 + iqs/2, 4*sizeof(dst_t)), hi, 4*sizeof(dst_t));
++    }
++}
++
++template <ggml_type type, int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
++static void dequantize_block_q_0_nc_sycl(const void * vx, dst_t * y,
++        const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
++        const int64_t s01, const int64_t s02, const int64_t s03, dpct::queue_ptr stream) {
++    // Check before multiplying; the rounded global work-item count must fit in int.
++    const int64_t max_items = int64_t(INT_MAX) / SYCL_DEQUANTIZE_BLOCK_SIZE * SYCL_DEQUANTIZE_BLOCK_SIZE;
++    const int64_t items_per_row = ne00/8;
++    if (ne00 % qk != 0 || items_per_row == 0 || items_per_row > max_items || ne01 > max_items / items_per_row) {
++        dequantize_block_nc_sycl<qk, qr, dequantize_kernel>(vx, y, ne00, ne01, ne02, ne03, s01, s02, s03, stream);
++        return;
++    }
++    const int64_t items_per_plane = ne01 * items_per_row;
++    const sycl::range<3> local_size(1, 1, SYCL_DEQUANTIZE_BLOCK_SIZE);
++    const sycl::range<3> num_blocks(ne02 * ne03, 1, ceil_div(items_per_plane, int64_t(SYCL_DEQUANTIZE_BLOCK_SIZE)));
++    stream->parallel_for(sycl::nd_range<3>(num_blocks * local_size, local_size),
++                         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
++                             dequantize_block_q_0_nc<type>(vx, y, ne00, ne01, ne02, s01, s02, s03, item_ct1);
++                         });
++}
++
+ template <typename src_t, typename dst_t>
+ static void convert_unary_nc(const void * __restrict__ vx, dst_t * __restrict__ y, const int64_t ne00, const int64_t ne01,
+                           const int64_t ne02, const int64_t s01, const int64_t s02, const int64_t s03,
+@@ -880,7 +976,7 @@ to_fp16_nc_sycl_t ggml_get_to_fp16_nc_sycl(ggml_type type) {
+         case GGML_TYPE_Q1_0:
+             return dequantize_block_nc_sycl<QK1_0, QR1_0, dequantize_q1_0>;
+         case GGML_TYPE_Q4_0:
+-            return dequantize_block_nc_sycl<QK4_0, QR4_0, dequantize_q4_0>;
++            return dequantize_block_q_0_nc_sycl<GGML_TYPE_Q4_0, QK4_0, QR4_0, dequantize_q4_0>;
+         case GGML_TYPE_Q4_1:
+             return dequantize_block_nc_sycl<QK4_1, QR4_1, dequantize_q4_1>;
+         case GGML_TYPE_Q5_0:
+@@ -888,7 +984,7 @@ to_fp16_nc_sycl_t ggml_get_to_fp16_nc_sycl(ggml_type type) {
+         case GGML_TYPE_Q5_1:
+             return dequantize_block_nc_sycl<QK5_1, QR5_1, dequantize_q5_1>;
+         case GGML_TYPE_Q8_0:
+-            return dequantize_block_nc_sycl<QK8_0, QR8_0, dequantize_q8_0>;
++            return dequantize_block_q_0_nc_sycl<GGML_TYPE_Q8_0, QK8_0, QR8_0, dequantize_q8_0>;
+         default:
+             return nullptr;
+     }
