@@ -66,3 +66,15 @@ This is the same mechanism as volta-fa P-6 (`third_party/patches/0002` there). O
 Static only: how much these spills cost at runtime (spill traffic goes through L1/L3) is a Phase 0 question. It is a new candidate below (§5, item 6).
 
 Before porting anything, re-check upstream for the same fix (the SYCL backend moves fast: oneDNN/MKL FA paths and Xe2 tuning landed in 2026).
+
+## 7. FP16 output accumulators in SYCL TILE and VEC (2026-10-11, from the P100 project)
+
+The P100 sibling project (`~/Github/P100`, `docs/research/pre-hardware-findings-2-2026-10-10.md` §1–2) found that CUDA's TILE kernel sums P·V in half2 when fast FP16 is available. A CPU model of the real key split, with V biased +2 on 8 channels, gives up to 33% max relative error at 32K keys for a 3-block prefill split and 58% unsplit. Flushing to FP32 per KV tile brings that to ≤ 0.17%. The SYCL backend is more exposed than CUDA:
+
+- **TILE always accumulates VKQ in half2.** `SYCL_FAST_FP16` is defined unconditionally (`ggml-sycl/common.hpp:48`, "don't change. remove it will break fattn-tile.hpp building"), which selects `sycl::half2 VKQ[...]` (`fattn-tile.hpp:779`). The FP32 path (`:797`) exists but is never compiled.
+- **VEC accumulates VKQ in half2 when `GGML_SYCL_F16` is ON** (`fattn-vec.hpp:142-143`), which is how our builds run. CUDA's VEC accumulates in FP32.
+- So on the A770, every FA call below 32 tokens (TILE or VEC; §1) sums V in FP16. Only ≥ 32 tokens (oneDNN/MKL) avoids it. P-6 does not change the number of keys per accumulator column, so it neither causes nor fixes this.
+- llama.cpp's CPU reference in `test-backend-ops` also accumulates F16 V in FP16 (`ggml_compute_forward_flash_attn_ext_f16_one_chunk`, `VKQ16`). A biased-V long-context test can therefore fail even when the backend is right, or pass when both are wrong. P100's patch 0003 adds 16 biased-V cases and makes the reference accumulate in FP32 under `params->use_ref` only.
+- How many keys share one accumulator on the A770 depends on `parallel_blocks` for 32 Xe-cores. That is not computed yet. Whether real models have V channels with a large mean relative to their spread is unmeasured: biased V is a stress test.
+
+Measurement first: ticket `p11-sycl-fa-fp16-accumulation` (CPU SYCL device, same kernels). A fix, such as P100's per-KV-tile FP32 flush, waits for that result. TILE already spills on acm-g10 (§6), and an FP32 copy of VKQ costs registers.
