@@ -78,3 +78,12 @@ The P100 sibling project (`~/Github/P100`, `docs/research/pre-hardware-findings-
 - How many keys share one accumulator on the A770 depends on `parallel_blocks` for 32 Xe-cores. That is not computed yet. Whether real models have V channels with a large mean relative to their spread is unmeasured: biased V is a stress test.
 
 Measurement first: ticket `p11-sycl-fa-fp16-accumulation` (CPU SYCL device, same kernels). A fix, such as P100's per-KV-tile FP32 flush, waits for that result. TILE already spills on acm-g10 (§6), and an FP32 copy of VKQ costs registers.
+
+**Measured on the CPU SYCL device (2026-10-11).** With oneDNN disabled, 0005's biased-V cases pass 16/16 against an FP32 CPU reference in both A (F16 ON) and B (F16 OFF): 4 VEC and 12 TILE cases each, including no-mask nb=512 through TILE.
+R, with the original FP16 reference, fails 16/16 (printed NMSE 0.357734289–0.624953355); R/A/B each pass the unchanged p6a subset 85/85.
+Passing cases print no numeric ERR, so these runs cannot quantify a VEC improvement from F16 OFF or isolate a failing SYCL route against FP32.
+C, removing only `SYCL_FAST_FP16`, does not build: `fattn-tile.hpp:714` reports a missing FP32 DKQ=576, DV=512, 32-column configuration (`kernel config not defined`). No TILE header change was made.
+The measured CPU device properties and launch formula give 64 keys per TILE output accumulator in these biased-V cases; the long context is split much more finely than on the A770.
+For masked Llama-3.1-8B at nsm=32, assuming max work-group size 1024 (m=2), decode/nb=16 use 8/4 parallel blocks: 4096/8192 keys per accumulator at 32K; the driver property is not verified on an A770.
+These are CPU-device numerics, not A770 numerics; real-model V statistics, any fix, and timing remain unverified.
+Commands, per-case route/pass/fail/ERR tables, first compiler error, split formulas with source anchors, wall times and gzipped logs: [results README](../../bench/results/p11-sycl-fa-fp16-20261011/README.txt).
