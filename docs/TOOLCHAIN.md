@@ -31,7 +31,12 @@ What works here:
 
 ### SYCL on the CPU (correctness only)
 
-`bin/sycl-cpu-tbo.sh -o FLASH_ATTN_EXT -p "$P"` runs llama.cpp's correctness tests on the Intel OpenCL CPU using the main checkout's read-only oneAPI toolchain; `LLAMA` overrides the scratch clone. It applies the test-only patch, builds optimized JIT spir64 with F16 enabled and oneDNN/Level Zero disabled, and verifies SYCL0 is the CPU. `GGML_SYCL_TEST_CPU=1` gates device acceptance, CPU launch metadata, and per-kernel build images. The approved scalar ALiBi slope loop is an ungated CPU-JIT workaround for a missing vector `pown` builtin; the patch is not for upstream. The [recorded subset](../bench/results/sycl-cpu-fa-baseline-20261010/README.txt) defines `$P`: 85/85 passed through TILE, VEC, and MKL. Removing TILE Q scaling produced a failure; after reverting and rebuilding, 85/85 passed again. The support scan reports 1294 unsupported cases. Full-suite correctness and A770 execution, performance, and XMX behavior are not verified.
+`bin/sycl-cpu-tbo.sh -o FLASH_ATTN_EXT -p "$P"` runs llama.cpp's correctness tests on the Intel OpenCL CPU using the main checkout's read-only oneAPI toolchain; `LLAMA` overrides the scratch clone. It applies the test-only patch, builds optimized JIT spir64 with F16 ON by default and oneDNN/Level Zero disabled, and verifies SYCL0 is the CPU. `GGML_SYCL_TEST_CPU=1` gates device acceptance, CPU launch metadata, and per-kernel build images. The approved scalar ALiBi slope loop is an ungated CPU-JIT workaround for a missing vector `pown` builtin; the patch is not for upstream. The [recorded subset](../bench/results/sycl-cpu-fa-baseline-20261010/README.txt) defines `$P`: 85/85 passed through TILE, VEC, and MKL. Removing TILE Q scaling produced a failure; after reverting and rebuilding, 85/85 passed again. The support scan reports 1294 unsupported cases. Full-suite correctness and A770 execution, performance, and XMX behavior are not verified.
+
+`SYCL_CPU_F16=ON|OFF` selects F16 at every reconfigure (default ON; other values exit 2).
+With `GGML_SYCL_TEST_CPU=1`, `GGML_SYCL_TEST_NSM` and `GGML_SYCL_TEST_MAX_WG_PER_CU` accept positive integers to override CPU launch geometry; unset/invalid values retain defaults.
+Use `GGML_SYCL_TEST_NSM=32 GGML_SYCL_TEST_MAX_WG_PER_CU=2` for the assumed A770 split;
+1 for the latter brackets that assumption. Effective geometry is printed; GPU devices are unchanged.
 
 What does not work here: running anything on an Arc GPU, timing, VTune/unitrace metrics, multi-GPU.
 

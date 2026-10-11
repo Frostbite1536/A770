@@ -66,18 +66,29 @@ index 85af4cab6..efde39e20 100644
  
              std::string filter = "";
 diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
-index d2c1a1a44..682e42b95 100644
+index d2c1a1a44..37c5d9bf4 100644
 --- a/ggml/src/ggml-sycl/ggml-sycl.cpp
 +++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
-@@ -237,6 +237,11 @@ static ggml_sycl_device_info ggml_sycl_init() {
-         info.devices[i].cc =
-             100 * prop.get_major_version() + 10 * prop.get_minor_version();
-         info.devices[i].nsm = prop.get_max_compute_units() / 16; //16: Number of Xe Cores
+@@ -249,2 +249,22 @@ static ggml_sycl_device_info ggml_sycl_init() {
+         info.devices[i].max_wg_per_cu = info.max_work_group_sizes[i] / prop.get_max_compute_units();
 +        const char * test_cpu = getenv("GGML_SYCL_TEST_CPU");
 +        if (test_cpu && std::strcmp(test_cpu, "1") == 0 && device.is_cpu()) {
 +            // CPU compute units are not groups of 16 Xe cores.
 +            info.devices[i].nsm = prop.get_max_compute_units();
++            const auto positive_env = [](const char * name, int fallback) {
++                const char * value = getenv(name);
++                if (!value || !*value) return fallback;
++                int parsed = 0;
++                for (const char * p = value; *p; ++p) {
++                    if (*p < '0' || *p > '9' ||
++                        parsed > (std::numeric_limits<int>::max() - (*p - '0')) / 10) return fallback;
++                    parsed = 10 * parsed + (*p - '0');
++                }
++                return parsed > 0 ? parsed : fallback;
++            };
++            info.devices[i].nsm = positive_env("GGML_SYCL_TEST_NSM", info.devices[i].nsm);
++            info.devices[i].max_wg_per_cu = positive_env("GGML_SYCL_TEST_MAX_WG_PER_CU", info.devices[i].max_wg_per_cu);
++            fprintf(stderr, "GGML_SYCL_TEST_CPU: launch geometry nsm=%d max_wg_per_cu=%d\n",
++                    info.devices[i].nsm, info.devices[i].max_wg_per_cu);
 +        }
-         info.devices[i].opt_feature.reorder = device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
- #if GGML_SYCL_DNNL
-         info.devices[i].opt_feature.onednn_optimized_gemm = ggml_sycl_dnnl_detect_optimized_gemm(i);
+         info.devices[i].hw_info = get_device_hw_info(&device);

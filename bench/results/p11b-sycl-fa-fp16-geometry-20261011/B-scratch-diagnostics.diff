@@ -1,0 +1,29 @@
+diff --git a/ggml/src/ggml-sycl/fattn-common.hpp b/ggml/src/ggml-sycl/fattn-common.hpp
+index 2e8ac6a..88ad573 100644
+--- a/ggml/src/ggml-sycl/fattn-common.hpp
++++ b/ggml/src/ggml-sycl/fattn-common.hpp
+@@ -1114,6 +1114,11 @@ void launch_fattn(
+         }
+     }
+ 
++    if (getenv("GGML_SYCL_MKL_FA_DEBUG")) {
++        fprintf(stderr, "[FA-PB] parallel_blocks=%d ntiles_total=%d nbatch_fa=%d ne11=%" PRId64 "\n",
++                parallel_blocks, ntiles_total, nbatch_fa, K->ne[1]);
++    }
++
+     float scale         = 1.0f;
+     float max_bias      = 0.0f;
+     float logit_softcap = 0.0f;
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index cfb303c..ec7c574 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -1544,6 +1544,8 @@ struct test_case {
+                 //printf("\n");
+                 //exit(1);
+                 ud->ok = false;
++            } else {
++                printf("[%s] ERR = %.9f <= %.9f (pass) ", ggml_op_desc(t1), err, ud->tc->max_err(ud->backend1));
+             }
+             return true;
+ 

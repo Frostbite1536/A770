@@ -87,3 +87,13 @@ The measured CPU device properties and launch formula give 64 keys per TILE outp
 For masked Llama-3.1-8B at nsm=32, assuming max work-group size 1024 (m=2), decode/nb=16 use 8/4 parallel blocks: 4096/8192 keys per accumulator at 32K; the driver property is not verified on an A770.
 These are CPU-device numerics, not A770 numerics; real-model V statistics, any fix, and timing remain unverified.
 Commands, per-case route/pass/fail/ERR tables, first compiler error, split formulas with source anchors, wall times and gzipped logs: [results README](../../bench/results/p11-sycl-fa-fp16-20261011/README.txt).
+
+**With A770 launch geometry (CPU device, 2026-10-11).** Test-only overrides set nsm=32 and max_wg_per_cu=2 (g-a770), or 1 (g-min); kernels and tolerances are unchanged.
+At g-a770, A (F16 ON) and B (F16 OFF) both pass 12/16 biased-V cases against the FP32 CPU reference; both pass 16/16 at the CPU defaults.
+VEC passes 4/4 and TILE 8/12 in both configurations, failing all nb=512 cases with 8192/16384 keys per accumulator at 16K/32K KV.
+Worst printed g-a770 TILE NMSE is 2.306230598 (A) and 2.296160712 (B), versus the unchanged 0.000500000 tolerance; B still uses half2 TILE accumulation.
+All g-a770 launch prints match p11: VEC p=16; TILE p=16 at nb=4/16 and p=2 at nb=512.
+At g-min, both configurations pass 8/16: VEC 4/4, TILE 4/12; TILE additionally fails the 32K nb=4/16 cases (4096 keys per accumulator).
+A's unchanged p6a subset passes 85/85 at both CPU defaults and g-a770.
+CPU-device evidence only: A770 numerics and maximum work-group size, real-model V statistics, any fix, and timing are unverified. No fix is proposed or selected.
+Commands, all six per-case NMSE/route/split tables, margins, scratch-only diagnostic diffs, wall times and gzipped logs: [p11b results](../../bench/results/p11b-sycl-fa-fp16-geometry-20261011/README.txt).
