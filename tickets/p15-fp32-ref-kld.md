@@ -1,6 +1,6 @@
 # Ticket p15-fp32-ref-kld: FP32-reference KL divergence for SYCL matmul paths (development switch + Phase 0 step)
 
-Your current directory is a git worktree of A770 (branch `p15-fp32-ref-kld`, based on `main` @ `8ab9ea4`). Work only here.
+Your current directory is a git worktree of A770 (branch `p15-fp32-ref-kld`, based on `main` @ `32fcda0`). Work only here.
 
 ## Rules (mandatory, repeated in every ticket)
 - Target is Intel Arc A770 (Xe-HPG, acm-g10) ONLY. XMX only through DPAS at sub-group size 8: SYCL `joint_matrix` 8x8x16 (f16/bf16 in, f32 accumulate) or the OpenCL SIMD8 builtins with an `int8` A operand. Do NOT use SIMD16 DPAS forms or shapes, 2D block loads/stores, TF32, FP8, FP64, or code written for Battlemage/Xe2/PVC (sycl-tla, XeTLA). If you think you need one, STOP and explain.
@@ -8,7 +8,7 @@ Your current directory is a git worktree of A770 (branch `p15-fp32-ref-kld`, bas
 - The toolchain lives in the MAIN checkout. Start every shell command with `export PATH=/home/p51/Github/A770/.venv/bin:$PATH;` so `cmake`, `ninja`, `ctest` and `python` resolve there. Use `/home/p51/Github/A770/tools/` by absolute path. Never install anything. Build into `build/` inside this worktree.
 - For every kernel you touch run `python bin/xe-report.py <file> [--expect-dpas REGEX]` and paste its table. Spill must be 0; XMX kernels must show DPAS > 0 at SIMD 8.
 - Never write the NxN score matrix to global memory (INV-NUM-001). Layout/mask/causal semantics are fixed by `include/a770/attention.h`.
-- Do NOT commit, push, or run git commands that write. Leave changes uncommitted; the manager commits.
+- Do NOT commit, push, or run git commands that write in the A770 repo or this worktree. Leave changes uncommitted; the manager commits. Exception: inside your scratch llama.cpp clone under `build/` (see Steps 0) you may `git apply`, `git commit` and `git format-patch` to produce the patch.
 - Do not loosen tolerances and do not edit existing tests to make them pass; report the failure instead.
 - Never invent benchmark numbers. There is no A770 on this machine: anything needing one is "not run".
 - Do not read .env, tokens, or model weights. No network.
@@ -26,7 +26,7 @@ volta-fa's CUDA switch is in `~/Github/volta-fa/bench/results/p9-scale2-20261011
    - With `GGML_SYCL_F32_REF` set, quantised dense MUL_MAT is routed past the MMVQ/DMMV/MMQ and fused-GEMM paths. The weights are dequantised to an FP32 temporary (the existing `to_fp32` converters) and multiplied with oneMKL SGEMM (the existing `dpct::gemm` / oneMKL call path used elsewhere in `ggml-sycl.cpp`; find it and reuse it).
    - The first time it takes effect, it prints one stderr line: `GGML_SYCL_F32_REF: quantised MUL_MAT via dequantize + SGEMM`.
    - MUL_MAT_ID is not covered; say so in the patch comment.
-2. **New opt-in step `kld` in `bench/phase0.sh`** (SYCL only). It requires `bench/models.txt` and `PPL_TEXT`; otherwise it logs one line and skips.
+2. **New opt-in step `kld` in `bench/phase0.sh`** (SYCL only). (Manager notes: `bench-only/` already holds `0001` and `0002`, which `phase0.sh` applies from its explicit every-build `bench_patches` list. `0003` must NOT join that list and must never be applied to `$LLAMA`. Build the reference tree in a separate local clone of `$LLAMA` (e.g. `$LLAMA-f32ref`, `git clone --no-hardlinks`), at the same commit, with the same every-build patches plus `0003`, and log its HEAD and applied patches. Add a README row saying `0003` goes only into the reference build.) It requires `bench/models.txt` and `PPL_TEXT`; otherwise it logs one line and skips.
    - **Builds:** `llama-perplexity` in the normal SYCL tree, and in a reference tree = the SYCL tree + this patch.
    - **Reference per model:**
      ```
@@ -40,12 +40,14 @@ volta-fa's CUDA switch is in `~/Github/volta-fa/bench/results/p9-scale2-20261011
 ## Files you may touch
 - `third_party/patches/bench-only/0003-sycl-f32-reference-matmul-dev-switch.patch` (new), `third_party/patches/bench-only/README.md`
 - `bench/phase0.sh`
-- `tests/CMakeLists.txt` (a CPU-device ctest of the switch, skipped without the oneAPI CPU runtime)
+- `tests/CMakeLists.txt` (a CPU-device ctest of the switch, skipped without the oneAPI CPU runtime); follow the pattern of the existing `sycl_cpu_mul_mat_range` test, with `LABELS sycl_cpu`, and do not edit that test
 Nothing else.
 
 ## Steps
+0. **Harness (manager note).** This worktree has no `third_party/llama.cpp` (gitignored). Make a scratch clone with `git clone --no-hardlinks /home/p51/Github/A770/third_party/llama.cpp build/llama` (it is at the pin `79e2e74`); never write to the main checkout's tree. `LLAMA=$PWD/build/llama bin/sycl-cpu-tbo.sh [test-backend-ops args]` builds and runs on the Intel OpenCL CPU device (see `docs/TOOLCHAIN.md` "SYCL on the CPU"); use `SYCL_CACHE_PERSISTENT=1 SYCL_CACHE_DIR=/tmp/p15-sycl-cache`. Label every CPU-device result "SYCL on the Intel OpenCL CPU device".
+   Check `0003` applies (a) to the pin alone, (b) on top of bench-only `0001` and `0002`, and (c) on top of `third_party/patches/0001`–`0005`. Report each.
 1. Write the switch in a scratch worktree at the pin, and build it with `bin/sycl-cpu-tbo.sh`'s CPU-device setup.
-2. **Positive control on the SYCL CPU device:** with `GGML_SYCL_F32_REF=1`, run `test-backend-ops test -b SYCL0 -o MUL_MAT -p 'type_a=(q4_0|q8_0|q4_K|q5_K|q6_K),type_b=f32'` and report the pass count and the stderr line. Then run without the variable for comparison. Label both as CPU device.
+2. **Positive control on the SYCL CPU device** (manager addition: also run `-p src1_scale` with `SYCL_CPU_BENCH_PATCHES=1`, i.e. bench-only `0002`'s range cases, with and without `GGML_SYCL_F32_REF=1`, and report pass counts; the clone then carries `0001`+`0002`+`0003`): with `GGML_SYCL_F32_REF=1`, run `test-backend-ops test -b SYCL0 -o MUL_MAT -p 'type_a=(q4_0|q8_0|q4_K|q5_K|q6_K),type_b=f32'` and report the pass count and the stderr line. Then run without the variable for comparison. Label both as CPU device.
 3. Implement the `kld` step and the ctest.
 
 ## Must pass before you finish

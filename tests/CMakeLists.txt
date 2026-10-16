@@ -109,6 +109,80 @@ else()
   set_tests_properties(sycl_cpu_mul_mat_range PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")
 endif()
 
+# The development reference must run every range case successfully and announce
+# itself exactly once. Only the scratch clone is patched; no GPU is required.
+if(EXISTS "${sycl_cpu_runtime}/etc/OpenCL/vendors/intel-ocl-cpu.icd" AND
+   EXISTS "${sycl_cpu_runtime}/lib/intel-ocl-cpu/libintelocl.so" AND
+   EXISTS "${sycl_cpu_runtime}/bin/icpx")
+  # Own clone: 0003 is reference-only and must not enter the tree the range test above uses.
+  file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/sycl-cpu-f32ref.cmake CONTENT [=[
+set(llama "@PROJECT_BINARY_DIR@/llama-f32ref")
+set(log "@PROJECT_BINARY_DIR@/p15-f32ref/ctest-f32ref.txt")
+set(err "@PROJECT_BINARY_DIR@/p15-f32ref/ctest-f32ref.err")
+file(MAKE_DIRECTORY "@PROJECT_BINARY_DIR@/p15-f32ref")
+if(NOT EXISTS "${llama}/.git")
+  set(source "@PROJECT_SOURCE_DIR@/third_party/llama.cpp")
+  if(NOT EXISTS "${source}/.git")
+    set(source "/home/p51/Github/A770/third_party/llama.cpp")
+  endif()
+  if(NOT EXISTS "${source}/.git")
+    message("SKIP: local pinned llama.cpp clone unavailable for SYCL CPU FP32 reference")
+    return()
+  endif()
+  execute_process(COMMAND git clone --no-hardlinks "${source}" "${llama}" RESULT_VARIABLE rc)
+  if(NOT rc EQUAL 0)
+    message(FATAL_ERROR "Local llama.cpp clone failed: ${rc}")
+  endif()
+endif()
+set(patch "@PROJECT_SOURCE_DIR@/third_party/patches/bench-only/0003-sycl-f32-reference-matmul-dev-switch.patch")
+execute_process(COMMAND git -C "${llama}" apply --check --reverse "${patch}"
+  RESULT_VARIABLE applied OUTPUT_QUIET ERROR_QUIET)
+if(NOT applied EQUAL 0)
+  execute_process(COMMAND git -C "${llama}" apply --check "${patch}" RESULT_VARIABLE rc)
+  if(NOT rc EQUAL 0)
+    message(FATAL_ERROR "FP32-reference patch check failed: ${rc}")
+  endif()
+  execute_process(COMMAND git -C "${llama}" apply "${patch}" RESULT_VARIABLE rc)
+  if(NOT rc EQUAL 0)
+    message(FATAL_ERROR "FP32-reference patch failed: ${rc}")
+  endif()
+endif()
+execute_process(
+  COMMAND "@CMAKE_COMMAND@" -E env
+    --unset=GGML_SYCL_ENABLE_OPT --unset=GGML_SYCL_XMX_GATHER_TYPES --unset=GGML_SYCL_XMX_GATHER_SHAPES
+    "LLAMA=${llama}" SYCL_CPU_BENCH_PATCHES=1 GGML_SYCL_F32_REF=1
+    SYCL_CACHE_PERSISTENT=1 SYCL_CACHE_DIR=/tmp/p15-sycl-cache
+    bash "@PROJECT_SOURCE_DIR@/bin/sycl-cpu-tbo.sh" test -o MUL_MAT -b SYCL0 -p src1_scale
+  RESULT_VARIABLE rc OUTPUT_FILE "${log}" ERROR_FILE "${err}" TIMEOUT 7200)
+file(READ "${log}" output)
+file(READ "${err}" errors)
+if(NOT "${rc}" STREQUAL "0" OR
+   NOT errors MATCHES "GGML_SYCL_TEST_CPU: SYCL0 is Intel OpenCL CPU:")
+  message(FATAL_ERROR "SYCL CPU FP32-reference run failed (${rc}); see ${log}")
+endif()
+string(ASCII 27 esc)
+string(REGEX REPLACE "${esc}[[][0-9;]*m" "" output "${output}")
+string(REGEX MATCHALL "GGML_SYCL_F32_REF: quantised MUL_MAT via dequantize [+] SGEMM" announcements "${errors}")
+list(LENGTH announcements announcement_count)
+string(REGEX MATCHALL "MUL_MAT[(][^\n]*src1_scale=[^\n]*[)]: [^\n]*OK" cases "${output}")
+list(LENGTH cases count)
+if(NOT count EQUAL 96 OR NOT announcement_count EQUAL 1 OR
+   NOT output MATCHES "96/96 tests passed")
+  message(FATAL_ERROR "Incomplete FP32 reference (${count}/96 cases, ${announcement_count} announcements); see ${log}")
+endif()
+message("SYCL on the Intel OpenCL CPU device: FP32 reference 96/96 tests passed; one announcement; ${log}")
+]=] @ONLY)
+  add_test(NAME sycl_cpu_mul_mat_f32_ref
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/sycl-cpu-f32ref.cmake)
+  set_tests_properties(sycl_cpu_mul_mat_f32_ref PROPERTIES TIMEOUT 7300 RUN_SERIAL TRUE
+    SKIP_REGULAR_EXPRESSION "SKIP:" LABELS sycl_cpu)
+else()
+  add_test(NAME sycl_cpu_mul_mat_f32_ref COMMAND ${CMAKE_COMMAND} -E echo
+    "SKIP: oneAPI CPU runtime/compiler not installed for SYCL CPU FP32 reference")
+  set_tests_properties(sycl_cpu_mul_mat_f32_ref PROPERTIES
+    SKIP_REGULAR_EXPRESSION "SKIP:" LABELS sycl_cpu)
+endif()
+
 # Phase 0 has no dry-run mode; check shell syntax without requiring an A770.
 add_test(NAME phase0_syntax COMMAND bash -n ${PROJECT_SOURCE_DIR}/bench/phase0.sh)
 

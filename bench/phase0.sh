@@ -3,6 +3,8 @@
 #   bench/phase0.sh                        full run: env, build, FA/MUL_MAT correctness/perf, llama-bench grid
 #   STEPS="env perf" bench/phase0.sh       run only some steps (env build support test perf mmperf bench; opt-in prof)
 #   STEPS=prof bench/phase0.sh            opt-in 8/16-token device-time breakdown (needs unitrace and models.txt)
+#   PPL_TEXT=/path/to/text STEPS=kld bench/phase0.sh  opt-in SYCL KL divergence against an FP32 reference
+#   KLD_UB=16 KLD_CHUNKS=8                reference and arm batch size / corpus chunks
 #   PROF_REPS=4 STEPS=prof bench/phase0.sh  differential captures at -r 1 and -r (1 + PROF_REPS); default 4
 #   BACKENDS=sycl bench/phase0.sh          one backend only (default: "sycl vulkan"; INV-PERF-002 needs both)
 #   LLAMA=third_party/other-tree bench/phase0.sh   same kit against another llama.cpp tree (results tagged by tree name)
@@ -30,6 +32,18 @@ mkdir -p "$OUT"
 log() { echo "[$(date +%T)] $*" | tee -a "$OUT/run.log"; }
 has() { [[ " $STEPS " == *" $1 "* ]]; }
 uses() { [[ " $BACKENDS " == *" $1 "* ]]; }
+
+# Skip before hardware/toolchain checks, including a kld-only invocation.
+if has kld; then
+  if ! uses sycl; then
+    log "kld is SYCL only; skipping kld"
+    STEPS=${STEPS//kld/}
+  elif [[ ! -f bench/models.txt || -z ${PPL_TEXT:-} || ! -f ${PPL_TEXT:-} ]]; then
+    log "kld requires bench/models.txt and PPL_TEXT pointing to a text file; skipping kld"
+    STEPS=${STEPS//kld/}
+  fi
+  [[ "$STEPS" =~ [^[:space:]] ]] || exit 0
+fi
 
 # A prof-only invocation must skip cleanly even on a host without the GPU toolchain.
 if has prof; then
@@ -72,12 +86,13 @@ if has env; then
 fi
 
 bdir() { echo "$LLAMA/build-$1"; }
-if has build; then
-  # Explicit every-build list: future reference-only bench patches must not enter this list.
-  bench_patches=(
-    third_party/patches/bench-only/0001-tests-mul_mat-perf-cases-1-16.patch
-    third_party/patches/bench-only/0002-tests-mul_mat-activation-range.patch
-  )
+# Explicit every-build list. 0003 belongs ONLY to the separate kld reference clone.
+bench_patches=(
+  third_party/patches/bench-only/0001-tests-mul_mat-perf-cases-1-16.patch
+  third_party/patches/bench-only/0002-tests-mul_mat-activation-range.patch
+)
+sycl_cfg=(-DGGML_SYCL=ON -DGGML_SYCL_F16=ON -DGGML_SYCL_DEVICE_ARCH=acm-g10 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx)
+if has build || has kld; then
   for patch in "${bench_patches[@]}"; do
     patch=$PWD/$patch
     if git -C "$LLAMA" apply --check --reverse "$patch" 2>/dev/null; then
@@ -90,10 +105,12 @@ if has build; then
       exit 1
     fi
   done
+fi
+if has build; then
   for be in $BACKENDS; do
     log "build llama.cpp ($be)"
     case $be in
-      sycl)   cfg=(-DGGML_SYCL=ON -DGGML_SYCL_F16=ON -DGGML_SYCL_DEVICE_ARCH=acm-g10 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx) ;;
+      sycl)   cfg=("${sycl_cfg[@]}") ;;
       vulkan) cfg=(-DGGML_VULKAN=ON) ;;
       *) echo "unknown backend $be" >&2; exit 2 ;;
     esac
@@ -102,6 +119,95 @@ if has build; then
       log "BUILD FAILED ($be; last lines below; full log $OUT/build-$be.log)"; tail -20 "$OUT/build-$be.log" | tee -a "$OUT/run.log"; exit 1
     fi
   done
+fi
+
+if has kld; then
+  KLD_UB=${KLD_UB:-16}
+  KLD_CHUNKS=${KLD_CHUNKS:-8}
+  [[ "$KLD_UB" =~ ^[1-9][0-9]*$ && "$KLD_CHUNKS" =~ ^[1-9][0-9]*$ ]] || {
+    log "kld failed: KLD_UB and KLD_CHUNKS must be positive integers"; exit 1;
+  }
+  ref_patch=$PWD/third_party/patches/bench-only/0003-sycl-f32-reference-matmul-dev-switch.patch
+  if git -C "$LLAMA" apply --check --reverse "$ref_patch" 2>/dev/null; then
+    log "kld failed: reference-only 0003 is already in the normal tree $LLAMA"; exit 1
+  fi
+  llama_head=$(git -C "$LLAMA" rev-parse HEAD)
+  # A clone omits uncommitted patches. Replay the tracked delta from HEAD so the
+  # reference has exactly the normal sources (including the every-build patches).
+  git -C "$LLAMA" diff --binary HEAD -- > "$OUT/kld-source.patch"
+  ref_tree=$PWD/build/$(basename "$OUT")-f32ref
+  mkdir -p build
+  git clone --no-hardlinks --no-checkout "$(realpath "$LLAMA")" "$ref_tree" > "$OUT/kld-clone.log" 2>&1
+  git -C "$ref_tree" checkout --detach "$llama_head" >> "$OUT/kld-clone.log" 2>&1
+  if [[ -s "$OUT/kld-source.patch" ]]; then
+    git -C "$ref_tree" apply "$PWD/$OUT/kld-source.patch"
+  fi
+  {
+    echo "normal tree: $(realpath "$LLAMA")"
+    echo "normal HEAD: $llama_head"
+    echo "reference tree: $ref_tree"
+    echo "reference HEAD: $(git -C "$ref_tree" rev-parse HEAD)"
+    echo "tracked source delta: $OUT/kld-source.patch"
+  } > "$OUT/kld-patches.txt"
+  for patch in "${bench_patches[@]}"; do
+    git -C "$ref_tree" apply --check --reverse "$PWD/$patch"
+    echo "both builds: $patch" >> "$OUT/kld-patches.txt"
+  done
+  git -C "$ref_tree" apply --check "$ref_patch"
+  git -C "$ref_tree" apply "$ref_patch"
+  echo "reference build only: $ref_patch" >> "$OUT/kld-patches.txt"
+  cat "$OUT/kld-patches.txt" | tee -a "$OUT/run.log"
+  for tree in "$LLAMA" "$ref_tree"; do
+    build_log=$OUT/kld-build-sycl.log
+    [[ "$tree" == "$ref_tree" ]] && build_log=$OUT/kld-build-f32ref.log
+    log "build llama-perplexity ($tree)"
+    if ! { cmake -S "$tree" -B "$tree/build-sycl" -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF \
+             "${sycl_cfg[@]}" > "$build_log" 2>&1 &&
+           cmake --build "$tree/build-sycl" --target llama-perplexity >> "$build_log" 2>&1; }; then
+      log "kld build failed: $build_log"; tail -20 "$build_log" | tee -a "$OUT/run.log"; exit 1
+    fi
+  done
+  # Clean up large reference logits even when an arm fails or the run is interrupted.
+  kld_base=
+  trap '[[ -z "$kld_base" ]] || rm -f -- "$kld_base"' EXIT
+  while IFS= read -r m || [[ -n "$m" ]]; do
+    m=${m#"${m%%[![:space:]]*}"}
+    m=${m%"${m##*[![:space:]]}"}
+    [[ -z "$m" || "$m" == \#* ]] && continue
+    n=$(basename "$m" .gguf)
+    kld_base=$OUT/$n.ref.kld
+    ppl_args=(-m "$m" -f "$PPL_TEXT" -c 512 -b "$KLD_UB" -ub "$KLD_UB" -ngl 99 -fa on --chunks "$KLD_CHUNKS"
+              --kl-divergence-base "$kld_base")
+    log "kld FP32 reference ($n)"
+    env -u GGML_SYCL_ENABLE_OPT -u GGML_SYCL_XMX_GATHER_TYPES -u GGML_SYCL_XMX_GATHER_SHAPES \
+      GGML_SYCL_F32_REF=1 "$ref_tree/build-sycl/bin/llama-perplexity" "${ppl_args[@]}" \
+      > "$OUT/kld-$n-ref.out" 2> "$OUT/kld-$n-ref.err"
+    if ! grep -Fxq 'GGML_SYCL_F32_REF: quantised MUL_MAT via dequantize + SGEMM' "$OUT/kld-$n-ref.err" ||
+       [[ ! -s "$kld_base" ]]; then
+      log "kld failed: missing FP32 reference announcement or base file ($n)"; exit 1
+    fi
+    for arm in sycl sycl-nofg sycl-noopt; do
+      arm_env=()
+      case $arm in
+        sycl-nofg) arm_env=(GGML_SYCL_XMX_GATHER_TYPES=0) ;;
+        sycl-noopt) arm_env=(GGML_SYCL_ENABLE_OPT=0) ;;
+      esac
+      log "kld ($n, $arm)"
+      env -u GGML_SYCL_F32_REF -u GGML_SYCL_ENABLE_OPT -u GGML_SYCL_XMX_GATHER_TYPES -u GGML_SYCL_XMX_GATHER_SHAPES \
+        "${arm_env[@]}" "$(bdir sycl)/bin/llama-perplexity" "${ppl_args[@]}" --kl-divergence \
+        > "$OUT/kld-$n-$arm.out" 2> "$OUT/kld-$n-$arm.err"
+      summary=$OUT/kld-$n-$arm-summary.txt
+      grep -hE '^(Mean[[:space:]]+KLD:|Maximum KLD:|RMS Δp[[:space:]]*:|Same top p:)' \
+        "$OUT/kld-$n-$arm.out" "$OUT/kld-$n-$arm.err" > "$summary" || true
+      if [[ $(wc -l < "$summary") != 4 ]]; then
+        log "kld failed: incomplete summary ($n, $arm)"; exit 1
+      fi
+      { echo "$n ($arm)"; cat "$summary"; } | tee -a "$OUT/kld-summary.txt" "$OUT/run.log"
+    done
+    rm -f -- "$kld_base"
+    kld_base=
+  done < bench/models.txt
+  trap - EXIT
 fi
 
 dev() { case $1 in sycl) echo SYCL0 ;; vulkan) echo Vulkan0 ;; esac; }
