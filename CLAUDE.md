@@ -42,4 +42,4 @@ bench/phase0.sh                    # Phase 0 baseline kit: llama.cpp SYCL + Vulk
 
 ## Docs map
 
-[ARCHITECTURE](docs/ARCHITECTURE.md) · [INVARIANTS](docs/INVARIANTS.md) · [ROADMAP](docs/ROADMAP.md) · [WORKFLOW](docs/WORKFLOW.md) · [PROFILING](docs/PROFILING.md) · [TOOLCHAIN](docs/TOOLCHAIN.md) · [research/](docs/research/) · [REVIEW.md](REVIEW.md) · [prompts/](prompts/)
+[HANDOFF](docs/HANDOFF.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [INVARIANTS](docs/INVARIANTS.md) · [ROADMAP](docs/ROADMAP.md) · [WORKFLOW](docs/WORKFLOW.md) · [PROFILING](docs/PROFILING.md) · [TOOLCHAIN](docs/TOOLCHAIN.md) · [research/](docs/research/) · [REVIEW.md](REVIEW.md) · [prompts/](prompts/)

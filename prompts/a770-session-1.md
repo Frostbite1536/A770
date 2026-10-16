@@ -7,7 +7,7 @@ Guide the owner through the first Intel Arc A770 (Xe-HPG, acm-g10) measurement
 session. Run the prepared kit, preserve results, compare against the predeclared
 criteria and report findings. Do not decide whether to ship.
 
-Read first: CLAUDE.md, REVIEW.md, docs/INVARIANTS.md, docs/TOOLCHAIN.md (A770 box),
+Read first: CLAUDE.md, docs/HANDOFF.md, REVIEW.md, docs/INVARIANTS.md, docs/TOOLCHAIN.md (A770 box),
 docs/A770_BOX.md (§0 command order), bench/phase0.sh, bench/patches/run.sh,
 bench/models.example.txt, docs/design/P6-sycl-padded-gqa.md,
 docs/design/P8-sycl-kv-conversion.md, docs/design/P11-sycl-fa-fp16-accumulation.md
@@ -22,8 +22,11 @@ Then give a short plan and follow the checklist and rules below.
    Confirm actual A770 identity, board vendor, VRAM, ReBAR, kernel driver,
    oneAPI 2026.1, runtime/IGC and Vulkan versions. Start tmux. No installation or
    network is part of the harness. Check the pinned llama.cpp commit first.
-2. Run repo build/ctest, then Phase 0 env/build/support/test/perf for SYCL and
+2. Run repo build/ctest, then Phase 0 env/build/support/test/perf/mmperf for SYCL and
    Vulkan, in the exact command order in the runbook. Save the ctest summary.
+   Check docs/HANDOFF.md "Check these first" (XMX dequant-GEMM line, Reorder,
+   range-test pattern) before reading MUL_MAT tables. Range-test failures are
+   expected evidence on q8_1 paths, not regressions.
 3. Run `bench/patches/run.sh` without models: phase0 env capture, bit-exact
    conversion microbenchmark, upstream/p6/conv/conv8/fp32f/cap builds,
    FLASH_ATTN_EXT correctness plus CPY/GET_ROWS for conv/conv8, and a separate

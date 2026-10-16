@@ -1,6 +1,7 @@
 # A770 box: first measuring session
 
 Runtime status before this session: **not run** on A770. CPU smoke proves plumbing only.
+Read [HANDOFF.md](HANDOFF.md) first: box setup, and the Phase 0 MUL_MAT steps added by p12–p15.
 Target: Intel Arc A770 (Xe-HPG, acm-g10), llama.cpp at `bench/LLAMA_COMMIT`.
 
 ## 0. Quick path (execute in this order)
@@ -25,7 +26,7 @@ sycl-ls
 cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=icpx
 cmake --build build
 ctest --test-dir build --output-on-failure
-STEPS="env build support test perf" bench/phase0.sh
+STEPS="env build support test perf mmperf" bench/phase0.sh
 bench/patches/run.sh
 ```
 
