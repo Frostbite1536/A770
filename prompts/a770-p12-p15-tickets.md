@@ -39,12 +39,30 @@ Process, strictly one ticket at a time (all four edit bench/phase0.sh):
    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
    Then move to the next ticket.
 
+Harness gaps the tickets do not cover (found by the first session, 2026-10-16;
+add a "manager note" to each ticket before dispatch):
+- A worktree has no third_party/llama.cpp (it is gitignored). The worker makes a
+  scratch clone, git clone --no-hardlinks /home/p51/Github/A770/third_party/llama.cpp
+  build/llama (at the pin 79e2e74), and never writes to the main checkout's tree.
+  CPU-device runs: LLAMA=$PWD/build/llama bin/sycl-cpu-tbo.sh … with
+  SYCL_CACHE_PERSISTENT=1 SYCL_CACHE_DIR=/tmp/<ticket>-sycl-cache.
+- Git writes are allowed in that scratch clone (apply, commit, format-patch),
+  and nowhere in the A770 repo. Change the rules line to say so.
+- unitrace is not installed here and there is no network, so p13's fixture
+  will be synthetic.
+
 Ticket-specific checks:
 - p12: patches go in third_party/patches/bench-only/, never test-only/ (the kit
-  applies test-only/* in its CPU smoke run). No duplicate perf case names.
-  bin/mm-gbps.py: copy ~/Github/P100/bin/mm-gbps.py only if it is already
-  committed on P100's main (a parallel P100 session may still be writing it).
-  Otherwise write it to the ticket's spec with peak 560. The CPU device's
+  applies test-only/* in its CPU smoke run). phase0.sh applies them from an
+  explicit list, not a *.patch glob, because p15's patch goes only into the
+  reference build. Both backends share one $LLAMA tree, so apply once,
+  idempotently (git apply --check --reverse first, as bin/sycl-cpu-tbo.sh does).
+  No duplicate perf case names.
+  bin/mm-gbps.py: copy ~/Github/P100/bin/mm-gbps.py only if
+  git -C ~/Github/P100 log --oneline main -- bin/mm-gbps.py prints a commit
+  (a parallel P100 session may still be writing it; never copy its working
+  tree). Otherwise write it to the spec in P100's tickets/p13-mmperf-16.md,
+  Design item 4, with peak 560. The CPU device's
   "XMX dequant-GEMM combinations" line will probably say 0x0; record what it
   actually prints.
 - p13: if the unitrace fixture is not real output, its first line must say it is
