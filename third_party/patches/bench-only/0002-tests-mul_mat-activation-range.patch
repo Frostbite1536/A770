@@ -1,0 +1,75 @@
+From c327241e1a9cc80097a31fd04e363f788f913fb3 Mon Sep 17 00:00:00 2001
+From: A770 bench <a770-bench@localhost>
+Date: Fri, 16 Oct 2026 09:44:01 -0500
+Subject: [PATCH] tests: local-only MUL_MAT activation-range eval cases
+
+Port test_mul_mat_range from volta-fa local patch 0009, preserving its src1_scale suffix and per-256-value initialization. Cover Q4_0/Q8_0/Q4_K/Q5_K/Q6_K, n=1/2/4/8/16/32, m=128/4096, K=1024, scales 1e5/1e-5. Skip Q4_0/Q8_0 at 1e-5 because the CPU reference uses Q8_0 with FP16 d.
+
+Bench-only: q8_1 paths fail these tests by design. Never upstream and never part of an upstream test list; eval only, with existing tolerances.
+---
+ tests/test-backend-ops.cpp | 42 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 42 insertions(+)
+
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 4e3c6942b..932d5d70f 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -7459,6 +7459,33 @@ struct test_mul_mat_pos : public test_mul_mat {
+     }
+ };
+ 
++// mul_mat with src1 values of very different magnitudes per 256-value slice (x scale, scale/64, scale/4096): beyond the
++// FP16 range for scale = 1e5, in its subnormal range for scale = 1e-5, for kernels that convert activations to FP16
++struct test_mul_mat_range : public test_mul_mat {
++    const float scale;
++
++    test_mul_mat_range(ggml_type type_a, int64_t m, int64_t n, int64_t k, float scale)
++        : test_mul_mat(type_a, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}), scale(scale) {}
++
++    std::string vars() override {
++        return test_mul_mat::vars() + ",src1_scale=" + var_to_str(scale);
++    }
++
++    void initialize_tensors(ggml_context * ctx) override {
++        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
++            init_tensor_uniform(t);
++            if (t->type == GGML_TYPE_F32) {
++                std::vector<float> v(ggml_nelements(t));
++                ggml_backend_tensor_get(t, v.data(), 0, ggml_nbytes(t));
++                for (size_t i = 0; i < v.size(); ++i) {
++                    v[i] *= scale / float(1 << (6*((i / 256) % 3)));
++                }
++                ggml_backend_tensor_set(t, v.data(), 0, ggml_nbytes(t));
++            }
++        }
++    }
++};
++
+ enum mul_mat_add_mode {
+     MUL_MAT_ADD_MM_RES,     // mm + res
+     MUL_MAT_ADD_RES_MM,     // res + mm
+@@ -9584,6 +9611,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+     std::vector<std::unique_ptr<test_case>> test_cases;
+     std::default_random_engine rng(0);
+ 
++    // Local-only activation-range coverage: q8_1 paths fail these by design; never upstream.
++    for (ggml_type type_a : { GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K }) {
++        for (int n : { 1, 2, 4, 8, 16, 32 }) {
++            for (int m : { 128, 4096 }) {
++                for (float scale : { 1e5f, 1e-5f }) {
++                    // Q4_0/Q8_0 use Q8_0 in the CPU reference: its FP16 d underflows at 1e-5.
++                    if (scale < 1.0f && (type_a == GGML_TYPE_Q4_0 || type_a == GGML_TYPE_Q8_0)) {
++                        continue;
++                    }
++                    test_cases.emplace_back(new test_mul_mat_range(type_a, m, n, 1024, scale));
++                }
++            }
++        }
++    }
++
+     // unary ops
+     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
+         for (int v : {0, 1}) {
+-- 
+2.43.0
+

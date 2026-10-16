@@ -10,6 +10,13 @@ case "$f16" in
     ON|OFF) ;;
     *) echo 'SYCL_CPU_F16 must be ON or OFF' >&2; exit 2 ;;
 esac
+# Opt in to the same explicit every-build bench corpus as Phase 0.
+# Default behavior remains the test-only CPU patch and upstream test cases.
+bench_patches=${SYCL_CPU_BENCH_PATCHES:-0}
+case "$bench_patches" in
+    0|1) ;;
+    *) echo 'SYCL_CPU_BENCH_PATCHES must be 0 or 1' >&2; exit 2 ;;
+esac
 llama=${LLAMA:-third_party/llama.cpp}
 patch=$root/third_party/patches/test-only/0001-sycl-allow-cpu-device-for-tests.patch
 O=/home/p51/Github/A770/tools/oneapi-2026.1
@@ -19,6 +26,16 @@ export ONEAPI_DEVICE_SELECTOR=opencl:cpu
 export GGML_SYCL_TEST_CPU=1
 
 cd -- "$llama" || exit 1
+if [[ $bench_patches == 1 ]]; then
+    for bench_patch in \
+        "$root/third_party/patches/bench-only/0001-tests-mul_mat-perf-cases-1-16.patch" \
+        "$root/third_party/patches/bench-only/0002-tests-mul_mat-activation-range.patch"; do
+        if ! git apply --check --reverse "$bench_patch" 2>/dev/null; then
+            git apply --check "$bench_patch"
+            git apply "$bench_patch"
+        fi
+    done
+fi
 if ! git apply --check --reverse "$patch" 2>/dev/null; then
     git apply --check "$patch"
     git apply "$patch"

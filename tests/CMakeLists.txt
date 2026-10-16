@@ -41,6 +41,74 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(analyze_lb_rounds PROPERTIES PASS_REGULAR_EXPRESSION "105\\.00 \\(100\\.00–110\\.00, n=2\\) \\| 130\\.00 ± 1\\.00 \\| \\+23\\.8%")
 endif()
 
+# Bench-only range cases intentionally fail on q8_1 paths. This ctest checks that
+# the CPU-device run completes all 96 cases; numerical outcomes remain in its log.
+# It does not assert that those known numerical failures have been fixed.
+set(sycl_cpu_runtime /home/p51/Github/A770/tools/oneapi-2026.1)
+if(EXISTS "${sycl_cpu_runtime}/etc/OpenCL/vendors/intel-ocl-cpu.icd" AND
+   EXISTS "${sycl_cpu_runtime}/lib/intel-ocl-cpu/libintelocl.so" AND
+   EXISTS "${sycl_cpu_runtime}/bin/icpx")
+  file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/sycl-cpu-range.cmake CONTENT [=[
+set(llama "@PROJECT_BINARY_DIR@/llama")
+set(log "@PROJECT_BINARY_DIR@/p14-range/ctest-range-sycl.txt")
+file(MAKE_DIRECTORY "@PROJECT_BINARY_DIR@/p14-range")
+if(NOT EXISTS "${llama}/.git")
+  # Local clone only: never fetch, install, or write into the main checkout.
+  set(source "@PROJECT_SOURCE_DIR@/third_party/llama.cpp")
+  if(NOT EXISTS "${source}/.git")
+    set(source "/home/p51/Github/A770/third_party/llama.cpp")
+  endif()
+  if(NOT EXISTS "${source}/.git")
+    message("SKIP: local pinned llama.cpp clone unavailable for SYCL CPU range cases")
+    return()
+  endif()
+  execute_process(COMMAND git clone --no-hardlinks "${source}" "${llama}" RESULT_VARIABLE rc)
+  if(NOT rc EQUAL 0)
+    message(FATAL_ERROR "Local llama.cpp clone failed: ${rc}")
+  endif()
+endif()
+execute_process(
+  COMMAND "@CMAKE_COMMAND@" -E env
+    --unset=GGML_SYCL_ENABLE_OPT --unset=GGML_SYCL_XMX_GATHER_TYPES --unset=GGML_SYCL_XMX_GATHER_SHAPES
+    "LLAMA=${llama}" SYCL_CPU_BENCH_PATCHES=1
+    SYCL_CACHE_PERSISTENT=1 SYCL_CACHE_DIR=/tmp/p14-sycl-cache
+    bash "@PROJECT_SOURCE_DIR@/bin/sycl-cpu-tbo.sh" test -o MUL_MAT -b SYCL0 -p src1_scale
+  RESULT_VARIABLE rc OUTPUT_FILE "${log}" ERROR_FILE "${log}" TIMEOUT 7200)
+file(READ "${log}" output)
+if(NOT "${rc}" MATCHES "^[01]$" OR
+   NOT output MATCHES "GGML_SYCL_TEST_CPU: SYCL0 is Intel OpenCL CPU:")
+  message(FATAL_ERROR "SYCL CPU range harness failed (${rc}); see ${log}")
+endif()
+string(ASCII 27 esc)
+string(REGEX REPLACE "${esc}[[][0-9;]*m" "" output "${output}")
+string(REGEX MATCHALL "MUL_MAT[(][^\n]*src1_scale=[^\n]*[)]: [^\n]*(OK|FAIL)" cases "${output}")
+list(LENGTH cases count)
+string(REGEX MATCH "([0-9]+)/96 tests passed" summary "${output}")
+set(passed "${CMAKE_MATCH_1}")
+string(REGEX MATCHALL "MUL_MAT[(][^\n]*src1_scale=[^\n]*[)]: [^\n]*OK" ok_cases "${output}")
+list(LENGTH ok_cases ok_count)
+if(NOT count EQUAL 96 OR NOT summary)
+  message(FATAL_ERROR "Incomplete SYCL CPU range corpus (${count}/96 cases); see ${log}")
+endif()
+if(NOT ok_count EQUAL passed OR
+   (rc EQUAL 0 AND NOT passed EQUAL 96) OR (rc EQUAL 1 AND passed EQUAL 96))
+  message(FATAL_ERROR "SYCL CPU range exit status disagrees with summary; see ${log}")
+endif()
+message("SYCL on the Intel OpenCL CPU device: ${summary}; rc=${rc}; ${log}")
+message("Bench-only corpus execution checked; these fail on q8_1 paths by design.")
+]=] @ONLY)
+  add_test(NAME sycl_cpu_mul_mat_range
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/sycl-cpu-range.cmake)
+  # Clones and builds SYCL llama.cpp on first run (slow): `ctest -LE sycl_cpu` skips it.
+  set_tests_properties(sycl_cpu_mul_mat_range PROPERTIES TIMEOUT 7300 RUN_SERIAL TRUE
+    SKIP_REGULAR_EXPRESSION "SKIP:" LABELS sycl_cpu)
+else()
+  message(STATUS "SYCL CPU range cases skipped: oneAPI CPU runtime/compiler not installed")
+  add_test(NAME sycl_cpu_mul_mat_range COMMAND ${CMAKE_COMMAND} -E echo
+    "SKIP: oneAPI CPU runtime/compiler not installed for SYCL CPU range cases")
+  set_tests_properties(sycl_cpu_mul_mat_range PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")
+endif()
+
 # Phase 0 has no dry-run mode; check shell syntax without requiring an A770.
 add_test(NAME phase0_syntax COMMAND bash -n ${PROJECT_SOURCE_DIR}/bench/phase0.sh)
 

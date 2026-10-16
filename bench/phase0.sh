@@ -74,7 +74,10 @@ fi
 bdir() { echo "$LLAMA/build-$1"; }
 if has build; then
   # Explicit every-build list: future reference-only bench patches must not enter this list.
-  bench_patches=(third_party/patches/bench-only/0001-tests-mul_mat-perf-cases-1-16.patch)
+  bench_patches=(
+    third_party/patches/bench-only/0001-tests-mul_mat-perf-cases-1-16.patch
+    third_party/patches/bench-only/0002-tests-mul_mat-activation-range.patch
+  )
   for patch in "${bench_patches[@]}"; do
     patch=$PWD/$patch
     if git -C "$LLAMA" apply --check --reverse "$patch" 2>/dev/null; then
@@ -109,8 +112,27 @@ for be in $BACKENDS; do
   # Correctness vs CPU (a backend bug on the A770 is itself a finding).
   has test && { log "FA correctness ($D)"; "$TBO" test -o FLASH_ATTN_EXT -b "$D" > "$OUT/fa-test-$be.txt" 2>&1 || true
                 { grep -E "FAIL|passed" "$OUT/fa-test-$be.txt" || echo "  (no pass/fail summary found)"; } | tail -3 | tee -a "$OUT/run.log"; }
-  has test && { log "MUL_MAT correctness ($D)"; "$TBO" test -o MUL_MAT -b "$D" > "$OUT/mm-test-$be.txt" 2>&1 || true
+  # Excludes bench-only 0002's src1_scale cases (they fail on q8_1 paths by design; reported separately below).
+  has test && { log "MUL_MAT correctness ($D)"; "$TBO" test -o MUL_MAT -b "$D" -p '^(?!.*src1_scale=)' > "$OUT/mm-test-$be.txt" 2>&1 || true
                 { grep -E "FAIL|passed" "$OUT/mm-test-$be.txt" || echo "  (no pass/fail summary found)"; } | tail -3 | tee -a "$OUT/run.log"; }
+  if has test; then
+    log "MUL_MAT activation range: these fail on q8_1 paths by design ($D)"
+    range_arms=("$be")
+    [[ $D == SYCL0 ]] && range_arms+=(sycl-nofg sycl-noopt)
+    for arm in "${range_arms[@]}"; do
+      arm_env=()
+      case $arm in
+        sycl-nofg) arm_env=(GGML_SYCL_XMX_GATHER_TYPES=0) ;;
+        sycl-noopt) arm_env=(GGML_SYCL_ENABLE_OPT=0) ;;
+      esac
+      range_rc=0
+      env -u GGML_SYCL_ENABLE_OPT -u GGML_SYCL_XMX_GATHER_TYPES -u GGML_SYCL_XMX_GATHER_SHAPES \
+        "${arm_env[@]}" "$TBO" test -o MUL_MAT -b "$D" -p src1_scale \
+        > "$OUT/range-$arm.txt" 2>&1 || range_rc=$?
+      log "activation range ($arm, rc=$range_rc): $OUT/range-$arm.txt"
+      { grep -E '[0-9]+/[0-9]+ tests passed' "$OUT/range-$arm.txt" || echo "  (no pass/fail summary found)"; } | tee -a "$OUT/run.log"
+    done
+  fi
   # Kernel-level timing of every FA test case.
   has perf && { log "FA kernel perf ($D)"; stdbuf -oL "$TBO" perf -o FLASH_ATTN_EXT -b "$D" --output sql > "$OUT/fa-perf-$be.sql" 2> "$OUT/fa-perf-$be.err" || true; }
 done
