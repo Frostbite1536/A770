@@ -15,6 +15,8 @@ add_test(NAME error_budget COMMAND error_budget)
 # volta-fa: the formats are backend-independent).
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+  add_test(NAME mm_gbps
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/mm-gbps/test_mm_gbps.py)
   add_test(NAME step_breakdown
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/step-breakdown/test_step_breakdown.py)
   # Hand checks: Q/K/V/S/P = 8192+16384+16384+8192+4096 = 53248 B.
@@ -38,6 +40,9 @@ if(Python3_Interpreter_FOUND)
             ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/lb-r3.jsonl --labels a,b)
   set_tests_properties(analyze_lb_rounds PROPERTIES PASS_REGULAR_EXPRESSION "105\\.00 \\(100\\.00–110\\.00, n=2\\) \\| 130\\.00 ± 1\\.00 \\| \\+23\\.8%")
 endif()
+
+# Phase 0 has no dry-run mode; check shell syntax without requiring an A770.
+add_test(NAME phase0_syntax COMMAND bash -n ${PROJECT_SOURCE_DIR}/bench/phase0.sh)
 
 # bin/xe-report.py must keep catching the Xe-HPG traps it exists for. Needs ocloc (bin/setup-dev.sh);
 # skipped (code 77) without it.

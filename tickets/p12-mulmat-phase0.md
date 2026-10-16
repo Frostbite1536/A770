@@ -1,6 +1,6 @@
 # Ticket p12-mulmat-phase0: MUL_MAT correctness and 1–16-token timing in the Phase 0 kit (SYCL0 paths and Vulkan0)
 
-Your current directory is a git worktree of A770 (branch `p12-mulmat-phase0`, based on `main` @ `8ab9ea4`). Work only here.
+Your current directory is a git worktree of A770 (branch `p12-mulmat-phase0`, based on `main` @ `e663f02`). Work only here.
 
 ## Rules (mandatory, repeated in every ticket)
 - Target is Intel Arc A770 (Xe-HPG, acm-g10) ONLY. XMX only through DPAS at sub-group size 8: SYCL `joint_matrix` 8x8x16 (f16/bf16 in, f32 accumulate) or the OpenCL SIMD8 builtins with an `int8` A operand. Do NOT use SIMD16 DPAS forms or shapes, 2D block loads/stores, TF32, FP8, FP64, or code written for Battlemage/Xe2/PVC (sycl-tla, XeTLA). If you think you need one, STOP and explain.
@@ -8,7 +8,7 @@ Your current directory is a git worktree of A770 (branch `p12-mulmat-phase0`, ba
 - The toolchain lives in the MAIN checkout. Start every shell command with `export PATH=/home/p51/Github/A770/.venv/bin:$PATH;` so `cmake`, `ninja`, `ctest` and `python` resolve there. Use `/home/p51/Github/A770/tools/` by absolute path. Never install anything. Build into `build/` inside this worktree.
 - For every kernel you touch run `python bin/xe-report.py <file> [--expect-dpas REGEX]` and paste its table. Spill must be 0; XMX kernels must show DPAS > 0 at SIMD 8.
 - Never write the NxN score matrix to global memory (INV-NUM-001). Layout/mask/causal semantics are fixed by `include/a770/attention.h`.
-- Do NOT commit, push, or run git commands that write. Leave changes uncommitted; the manager commits.
+- Do NOT commit, push, or run git commands that write in the A770 repo or this worktree. Leave changes uncommitted; the manager commits. Exception: inside your scratch llama.cpp clone under `build/` (see Steps 0) you may `git apply`, `git commit` and `git format-patch` to produce the patch.
 - Do not loosen tolerances and do not edit existing tests to make them pass; report the failure instead.
 - Never invent benchmark numbers. There is no A770 on this machine: anything needing one is "not run".
 - Do not read .env, tokens, or model weights. No network.
@@ -41,9 +41,9 @@ Upstream's perf list (`tests/test-backend-ops.cpp`, `make_test_cases_perf`) only
 
    These are the same cases as the P100 repo's ticket p13, so results compare across the sibling repos.
 3. **`bench/phase0.sh`:**
-   - Apply the "every build" `bench-only/*.patch` files to each backend tree before building, and log each.
+   - Apply the "every build" bench-only patches to the llama.cpp tree before building, and log each. Keep them in an explicit list in `phase0.sh` (not a `*.patch` glob): a later ticket adds a bench-only patch that goes only into a separate reference build and must never be applied by this list. Both backends build in the same `$LLAMA` tree, so apply once, idempotently (`git apply --check --reverse` first, as `bin/sycl-cpu-tbo.sh` does), and fail clearly if a patch neither applies nor is already applied.
    - Add MUL_MAT to the `test` step (`test-backend-ops test -o MUL_MAT -b $D`, per backend).
-   - Add a new step `mmperf` to the default STEPS, after `perf`.
+   - Add a new step `mmperf` to the default STEPS, after `perf`. (Manager note: `phase0.sh` already has an opt-in `prof` step from ticket p13. It must stay out of the default STEPS; update the header comment's step list to include `mmperf`.)
 4. **`mmperf`:** `ROUNDS` (default 3) interleaved rounds. Each round runs these arms one after another, all with `test-backend-ops perf -o MUL_MAT --output sql -p <filter for the cases in 2>`:
 
    | arm | backend | environment |
@@ -60,7 +60,7 @@ Upstream's perf list (`tests/test-backend-ops.cpp`, `make_test_cases_perf`) only
    - `--peak-gbps` default 560;
    - standard library only, reusing `bench/analyze.py`'s SQL parsing.
 
-   If `~/Github/P100/bin/mm-gbps.py` already exists, copy it verbatim and change only the default peak. The kit writes the table to `$OUT/mmperf.md`.
+   If `~/Github/P100/bin/mm-gbps.py` already exists, copy it verbatim and change only the default peak. The interface is defined in `/home/p51/Github/P100/tickets/p13-mmperf-16.md`, Design item 4 (read it; its default peak 732 becomes 560 here). If `bin/mm-gbps.py` is not committed on P100's `main` (`git -C /home/p51/Github/P100 log --oneline main -- bin/mm-gbps.py` prints nothing), do not copy a working-tree file from P100; write it to that spec. The kit writes the table to `$OUT/mmperf.md`.
 6. Header comment: the arms, what each environment variable disables (with file anchors at the pin), and the research doc pointer.
 
 ## Files you may touch
@@ -70,7 +70,9 @@ Upstream's perf list (`tests/test-backend-ops.cpp`, `make_test_cases_perf`) only
 Nothing else.
 
 ## Steps
-1. Write the patch in a scratch worktree of `third_party/llama.cpp` at the pin under `build/`.
+0. **Harness (manager note).** This worktree has no `third_party/llama.cpp` (gitignored). Make a scratch clone with `git clone --no-hardlinks /home/p51/Github/A770/third_party/llama.cpp build/llama` (it is at the pin `79e2e74`); never write to the main checkout's tree. `LLAMA=$PWD/build/llama bin/sycl-cpu-tbo.sh [test-backend-ops args]` builds and runs on the Intel OpenCL CPU device (see `docs/TOOLCHAIN.md` "SYCL on the CPU"); use `SYCL_CACHE_PERSISTENT=1 SYCL_CACHE_DIR=/tmp/p12-sycl-cache`. Label every CPU-device result "SYCL on the Intel OpenCL CPU device".
+   Check `0001` applies (a) to the pin alone, (b) on top of `third_party/patches/0001`–`0005`, and (c) on top of the upstream variant `bench/patches/run.sh` builds (pin + `0005` + the `0002` cases it injects; see `prepare()` there), each in a fresh scratch clone. Report each.
+1. Write the patch in the scratch clone at the pin under `build/`.
    - Build `test-backend-ops` with `bin/sycl-cpu-tbo.sh`'s CPU-device setup, or CPU-only if that is simpler.
    - Run one new case (q4_K, m=4096, n=16, k=4096) in perf mode to show it exists and runs, and check for duplicate case names.
 2. On the SYCL CPU device, confirm that the three SYCL environment variables are read: the start-up log lists them. Report the `XMX dequant-GEMM combinations` line if the CPU device prints one (it will likely report 0x0; say so).

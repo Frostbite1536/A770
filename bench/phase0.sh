@@ -1,20 +1,28 @@
 #!/bin/bash
 # phase0.sh: Phase 0 baseline on the A770 box (docs/ROADMAP.md). Run from the repo root with oneAPI 2026.1 sourced.
-#   bench/phase0.sh                        full run: env, build, FA support/correctness/perf, llama-bench grid
-#   STEPS="env perf" bench/phase0.sh       run only some steps (env build support test perf bench)
+#   bench/phase0.sh                        full run: env, build, FA/MUL_MAT correctness/perf, llama-bench grid
+#   STEPS="env perf" bench/phase0.sh       run only some steps (env build support test perf mmperf bench; opt-in prof)
 #   STEPS=prof bench/phase0.sh            opt-in 8/16-token device-time breakdown (needs unitrace and models.txt)
 #   PROF_REPS=4 STEPS=prof bench/phase0.sh  differential captures at -r 1 and -r (1 + PROF_REPS); default 4
 #   BACKENDS=sycl bench/phase0.sh          one backend only (default: "sycl vulkan"; INV-PERF-002 needs both)
 #   LLAMA=third_party/other-tree bench/phase0.sh   same kit against another llama.cpp tree (results tagged by tree name)
 # Models: one GGUF path per line in bench/models.txt (see bench/models.example.txt).
 # Output: bench/results/phase0-<tree>-<date>-<host>/ (commit the small text/sql/jsonl files, never models).
+# MUL_MAT: ROUNDS=3 interleaved rounds of sycl (SYCL0 defaults), sycl-noopt (SYCL0,
+# GGML_SYCL_ENABLE_OPT=0 disables reordered-weight optimization), sycl-nofg (SYCL0,
+# GGML_SYCL_XMX_GATHER_TYPES=0 disables fused XMX dequant-GEMM), vulkan (Vulkan0 defaults).
+# Pin 79e2e74: ggml/src/ggml-sycl/ggml-sycl.cpp:418,431-432 reads the switches;
+# :240,4201-4248,4861-4862 gates reorder; :3134 tries fused GEMM. GGML_SYCL_XMX_GATHER_SHAPES
+# masks its matrix combinations (ggml/src/ggml-sycl/fused-gemm.cpp:116,244 logs availability).
+# See docs/research/volta-fa-p9-lessons-2026-10-11.md sections 1-3 for small-batch MUL_MAT context.
 # Status: drafted on a machine without an Arc GPU; NOT RUN yet.
 set -euo pipefail
 cd "$(dirname "$0")/.." || exit 2
 LLAMA=${LLAMA:-third_party/llama.cpp}
-STEPS=${STEPS:-"env build support test perf bench"}
+STEPS=${STEPS:-"env build support test perf mmperf bench"}
 BACKENDS=${BACKENDS:-"sycl vulkan"}
 REPS=${REPS:-3}
+ROUNDS=${ROUNDS:-3}
 PROF_REPS=${PROF_REPS:-4}
 TAG=${TAG:-$(basename "$LLAMA")}
 OUT=bench/results/phase0-$TAG-$(date +%Y%m%d-%H%M%S)-$(hostname -s 2>/dev/null || hostname)
@@ -65,6 +73,20 @@ fi
 
 bdir() { echo "$LLAMA/build-$1"; }
 if has build; then
+  # Explicit every-build list: future reference-only bench patches must not enter this list.
+  bench_patches=(third_party/patches/bench-only/0001-tests-mul_mat-perf-cases-1-16.patch)
+  for patch in "${bench_patches[@]}"; do
+    patch=$PWD/$patch
+    if git -C "$LLAMA" apply --check --reverse "$patch" 2>/dev/null; then
+      log "bench-only patch already applied: $patch"
+    elif git -C "$LLAMA" apply --check "$patch"; then
+      log "apply bench-only patch (every build): $patch"
+      git -C "$LLAMA" apply "$patch"
+    else
+      log "PATCH FAILED: $patch neither applies nor is already applied in $LLAMA"
+      exit 1
+    fi
+  done
   for be in $BACKENDS; do
     log "build llama.cpp ($be)"
     case $be in
@@ -87,6 +109,8 @@ for be in $BACKENDS; do
   # Correctness vs CPU (a backend bug on the A770 is itself a finding).
   has test && { log "FA correctness ($D)"; "$TBO" test -o FLASH_ATTN_EXT -b "$D" > "$OUT/fa-test-$be.txt" 2>&1 || true
                 { grep -E "FAIL|passed" "$OUT/fa-test-$be.txt" || echo "  (no pass/fail summary found)"; } | tail -3 | tee -a "$OUT/run.log"; }
+  has test && { log "MUL_MAT correctness ($D)"; "$TBO" test -o MUL_MAT -b "$D" > "$OUT/mm-test-$be.txt" 2>&1 || true
+                { grep -E "FAIL|passed" "$OUT/mm-test-$be.txt" || echo "  (no pass/fail summary found)"; } | tail -3 | tee -a "$OUT/run.log"; }
   # Kernel-level timing of every FA test case.
   has perf && { log "FA kernel perf ($D)"; stdbuf -oL "$TBO" perf -o FLASH_ATTN_EXT -b "$D" --output sql > "$OUT/fa-perf-$be.sql" 2> "$OUT/fa-perf-$be.err" || true; }
 done
@@ -95,6 +119,48 @@ if has perf && uses sycl; then
   log "FA kernel perf (SYCL0, GGML_SYCL_ENABLE_MKL_FA=0)"
   GGML_SYCL_ENABLE_MKL_FA=0 stdbuf -oL "$(bdir sycl)/bin/test-backend-ops" perf -o FLASH_ATTN_EXT -b SYCL0 --output sql \
     > "$OUT/fa-perf-sycl-nomkl.sql" 2> "$OUT/fa-perf-sycl-nomkl.err" || true
+fi
+
+if has mmperf; then
+  [[ "$ROUNDS" =~ ^[1-9][0-9]*$ ]] || { log "mmperf failed: ROUNDS must be a positive integer"; exit 1; }
+  # Full params anchor excludes batched, strided, permuted and overlapping variants.
+  MM_FILTER='^type_a=(q4_0|q8_0|q4_K|q5_K|q6_K),type_b=f32,(m=(4096|1024|14336),n=([1-9]|1[0-6]),k=4096|m=4096,n=([1-9]|1[0-6]),k=14336),bs=\[1,1\],nr=\[1,1\],per=\[0,1,2,3\],k_v=0,o=1,src_overlap=0,m_v=0,pad=0$'
+  arms=()
+  uses sycl && arms+=(sycl sycl-noopt sycl-nofg)
+  uses vulkan && arms+=(vulkan)
+  for ((round=1; round<=ROUNDS; round++)); do
+    for arm in "${arms[@]}"; do
+      be=sycl; arm_env=()
+      case $arm in
+        sycl-noopt) arm_env=(GGML_SYCL_ENABLE_OPT=0) ;;
+        sycl-nofg) arm_env=(GGML_SYCL_XMX_GATHER_TYPES=0) ;;
+        vulkan) be=vulkan ;;
+      esac
+      log "MUL_MAT perf ($arm, round $round/$ROUNDS)"
+      # Each arm starts from the default switches, even if the caller exported one.
+      if ! env -u GGML_SYCL_ENABLE_OPT -u GGML_SYCL_XMX_GATHER_TYPES -u GGML_SYCL_XMX_GATHER_SHAPES \
+          "${arm_env[@]}" stdbuf -oL "$(bdir "$be")/bin/test-backend-ops" perf -o MUL_MAT \
+          -b "$(dev "$be")" --output sql -p "$MM_FILTER" \
+          > "$OUT/mm-perf-$arm.r$round.sql" 2> "$OUT/mm-perf-$arm.r$round.err"; then
+        log "mmperf failed: $arm round $round (see .err)"
+        exit 1
+      fi
+      if [[ "$arm" == sycl && "$round" == 1 ]]; then
+        # Combinations are logged lazily on the first eligible MUL_MAT, after start-up.
+        cp "$OUT/mm-perf-sycl.r1.err" "$OUT/sycl-env.txt"
+        log "SYCL start-up settings and XMX availability: $OUT/sycl-env.txt"
+      fi
+    done
+  done
+  groups=()
+  for arm in "${arms[@]}"; do
+    group=
+    for ((round=1; round<=ROUNDS; round++)); do
+      group+=${group:+,}$OUT/mm-perf-$arm.r$round.sql
+    done
+    groups+=("$group")
+  done
+  python bin/mm-gbps.py "${groups[@]}" --labels "$(IFS=,; echo "${arms[*]}")" > "$OUT/mmperf.md"
 fi
 
 if has prof; then
