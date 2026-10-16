@@ -2,6 +2,8 @@
 # phase0.sh: Phase 0 baseline on the A770 box (docs/ROADMAP.md). Run from the repo root with oneAPI 2026.1 sourced.
 #   bench/phase0.sh                        full run: env, build, FA support/correctness/perf, llama-bench grid
 #   STEPS="env perf" bench/phase0.sh       run only some steps (env build support test perf bench)
+#   STEPS=prof bench/phase0.sh            opt-in 8/16-token device-time breakdown (needs unitrace and models.txt)
+#   PROF_REPS=4 STEPS=prof bench/phase0.sh  differential captures at -r 1 and -r (1 + PROF_REPS); default 4
 #   BACKENDS=sycl bench/phase0.sh          one backend only (default: "sycl vulkan"; INV-PERF-002 needs both)
 #   LLAMA=third_party/other-tree bench/phase0.sh   same kit against another llama.cpp tree (results tagged by tree name)
 # Models: one GGUF path per line in bench/models.txt (see bench/models.example.txt).
@@ -13,12 +15,25 @@ LLAMA=${LLAMA:-third_party/llama.cpp}
 STEPS=${STEPS:-"env build support test perf bench"}
 BACKENDS=${BACKENDS:-"sycl vulkan"}
 REPS=${REPS:-3}
+PROF_REPS=${PROF_REPS:-4}
 TAG=${TAG:-$(basename "$LLAMA")}
 OUT=bench/results/phase0-$TAG-$(date +%Y%m%d-%H%M%S)-$(hostname -s 2>/dev/null || hostname)
 mkdir -p "$OUT"
 log() { echo "[$(date +%T)] $*" | tee -a "$OUT/run.log"; }
 has() { [[ " $STEPS " == *" $1 "* ]]; }
 uses() { [[ " $BACKENDS " == *" $1 "* ]]; }
+
+# A prof-only invocation must skip cleanly even on a host without the GPU toolchain.
+if has prof; then
+  if [ ! -f bench/models.txt ]; then
+    log "no bench/models.txt; skipping prof"
+    STEPS=${STEPS//prof/}
+  elif ! command -v unitrace > /dev/null; then
+    log "unitrace not found on PATH; skipping prof"
+    STEPS=${STEPS//prof/}
+  fi
+  [[ "$STEPS" =~ [^[:space:]] ]] || exit 0
+fi
 
 # Refuse to produce "baseline" numbers on the wrong hardware or toolchain (INV-PERF-001, INV-ARCH-003).
 if uses sycl; then
@@ -80,6 +95,56 @@ if has perf && uses sycl; then
   log "FA kernel perf (SYCL0, GGML_SYCL_ENABLE_MKL_FA=0)"
   GGML_SYCL_ENABLE_MKL_FA=0 stdbuf -oL "$(bdir sycl)/bin/test-backend-ops" perf -o FLASH_ATTN_EXT -b SYCL0 --output sql \
     > "$OUT/fa-perf-sycl-nomkl.sql" 2> "$OUT/fa-perf-sycl-nomkl.err" || true
+fi
+
+if has prof; then
+  m=
+  while IFS= read -r candidate || [[ -n "$candidate" ]]; do
+    # Ignore blank/comment lines, including leading whitespace; preserve spaces inside paths.
+    candidate=${candidate#"${candidate%%[![:space:]]*}"}
+    candidate=${candidate%"${candidate##*[![:space:]]}"}
+    [[ -z "$candidate" || "$candidate" == \#* ]] && continue
+    m=$candidate
+    break
+  done < bench/models.txt
+  if [ -z "$m" ]; then
+    log "no model paths in bench/models.txt; skipping prof"
+  else
+    if [[ ! "$PROF_REPS" =~ ^[1-9][0-9]*$ ]]; then
+      log "prof failed: PROF_REPS must be a positive integer"
+      exit 1
+    fi
+    mkdir -p "$OUT/prof"
+    # Some releases return nonzero for --help. Inspect the saved help text in either case.
+    unitrace --help > "$OUT/prof/unitrace-help.txt" 2>&1 || true
+    if ! grep -q -- '--device-timing' "$OUT/prof/unitrace-help.txt"; then
+      log "prof failed: unitrace --help lacks --device-timing (see $OUT/prof/unitrace-help.txt)"
+      exit 1
+    fi
+    for be in $BACKENDS; do
+      LB=$(bdir "$be")/bin/llama-bench; D=$(dev "$be")
+      for p in 8 16; do
+        for depth in 0 16384; do
+          for run in 1 N; do
+            repetitions=1
+            [[ "$run" == N ]] && repetitions=$((1 + PROF_REPS))
+            capture=$OUT/prof/$be-p$p-d$depth-r$run.txt
+            log "prof ($be, p=$p, depth=$depth, r=$repetitions)"
+            if ! unitrace --device-timing --kernel-submission "$LB" -m "$m" -dev "$D" \
+                -ngl 99 -fa 1 -p "$p" -n 0 -d "$depth" -r "$repetitions" \
+                > "$capture" 2>&1; then
+              log "prof failed ($be, p=$p, depth=$depth, r=$repetitions; see $capture)"
+              exit 1
+            fi
+          done
+        done
+      done
+    done
+    if ! python bin/step-breakdown.py "$OUT/prof" --reps "$PROF_REPS"; then
+      log "prof failed: could not parse device-timing summaries in $OUT/prof"
+      exit 1
+    fi
+  fi
 fi
 
 if has bench; then

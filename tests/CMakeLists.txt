@@ -15,6 +15,8 @@ add_test(NAME error_budget COMMAND error_budget)
 # volta-fa: the formats are backend-independent).
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+  add_test(NAME step_breakdown
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/step-breakdown/test_step_breakdown.py)
   # Hand checks: Q/K/V/S/P = 8192+16384+16384+8192+4096 = 53248 B.
   add_test(NAME plan_tiles_smoke
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/bin/plan-tiles.py

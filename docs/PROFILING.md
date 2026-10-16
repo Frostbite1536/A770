@@ -12,6 +12,18 @@ intel_gpu_top          # engine busy while a run is going (i915)
 
 Look for: time split between FA and matmul kernels, gaps between kernels (host submission, oneDNN primitive creation), K/V conversion kernels before FA.
 
+## Step breakdown
+
+Run `STEPS=prof bench/phase0.sh` on the A770 with `unitrace` on PATH and the first model in `bench/models.txt`.
+For each backend, p=8/16 and depth=0/16384, it captures `-r 1` and `-r (1 + PROF_REPS)` (default `PROF_REPS=4`).
+Both retain default warm-up; `(rN − r1) / PROF_REPS` cancels shared setup, warm-up and one-off depth prefill.
+Help and paired `*-r1.txt`/`*-rN.txt` outputs go in `$OUT/prof/`; `bin/step-breakdown.py --reps "$PROF_REPS"`
+generates `breakdown.md` with per-step calls, µs and category shares of summed device time, not wall-clock latency.
+Transfers, including per-repetition KV state restore at depth > 0, are reported but excluded from totals and shares.
+Nonpositive time deltas are marked `(noise)` and count as 0; negative call deltas and missing partners fail.
+It skips if the model list or unitrace is missing and fails if unitrace help lacks `--device-timing`.
+Check patterns and summary format on the box; both test captures are synthetic. Keep raw binary results uncommitted.
+
 ## Kernel view (VTune)
 
 ```bash

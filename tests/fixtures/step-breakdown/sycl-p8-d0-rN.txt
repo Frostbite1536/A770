@@ -1,0 +1,36 @@
+# SYNTHETIC: hand-written differential unitrace excerpt; no measured GPU timings.
+# Format reference: intel/pti-gpu tools/unitrace documentation's comma-separated device summary.
+# unitrace is not installed here; release-specific format has NOT been verified on the A770 box.
+# Paired captures: r1 uses -r 1, rN uses -r 5 (PROF_REPS=4).
+[INFO] Device: Intel(R) Arc(TM) A770 Graphics
+=== API Timing Results: ===
+Function, Calls, Time (ns), Time (%), Average (ns), Min (ns), Max (ns)
+zeCommandListAppendLaunchKernel, 100, 999999999, 100.00, 9999999, 1, 9999999
+
+=== Device Timing Results: ===
+Kernel,Calls,Time (ns),Time (%),Average (ns),Min (ns),Max (ns)
+one_off_prefill_mul_mat,4096,1000000000,99.01,244140.62,244140,244141
+"void mul_mat<half, float>(int)",9,1300000,0.13,144444.44,144444,144445
+kernel_mmvq_q4_0,5,300000,0.03,60000.00,60000,60000
+kernel_dmmv_q4_0,5,300000,0.03,60000.00,60000,60000
+kernel_mmq_q4_0,5,300000,0.03,60000.00,60000,60000
+fused_dequant_gemm_q4_0,5,300000,0.03,60000.00,60000,60000
+oneMKL_gemm_half,5,300000,0.03,60000.00,60000,60000
+oneDNN_gemm_float,5,300000,0.03,60000.00,60000,60000
+"flash_attn_ext<half, float, 8>",5,700000,0.07,140000.00,140000,140000
+fattn_tile_half,5,300000,0.03,60000.00,60000,60000
+sdpa_forward,5,300000,0.03,60000.00,60000,60000
+dequantize_q4_0,5,220000,0.02,44000.00,44000,44000
+convert_half,5,120000,0.01,24000.00,24000,24000
+cpy_f16,5,120000,0.01,24000.00,24000,24000
+quantize_q8_1,5,140000,0.01,28000.00,28000,28000
+rms_norm,5,220000,0.02,44000.00,44000,44000
+kernel_add,5,140000,0.01,28000.00,28000,28000
+soft_max,5,140000,0.01,28000.00,28000,28000
+unknown_kernel,5,300000,0.03,60000.00,60000,60000
+noisy_kernel,2,96000,0.01,48000.00,48000,48000
+MemoryCopy,5,4100000,0.41,820000.00,820000,820000
+
+=== Kernel Submission Results: ===
+Kernel, Calls, Time (ns), Time (%), Average (ns), Min (ns), Max (ns)
+submission_only, 100, 999999999, 100.00, 9999999, 1, 9999999
