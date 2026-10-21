@@ -73,4 +73,6 @@ An Opus manager plus worker models via Codex, with the same loop as volta-fa (ma
 
 ## License
 
-TBD (suggest MIT to stay compatible with llama.cpp).
+AGPL-3.0 ([LICENSE](LICENSE)). The patch series in `third_party/patches/` is additionally
+available under llama.cpp's MIT license so it can be merged upstream without relicensing
+this repo; everything else is AGPL-3.0 only.
